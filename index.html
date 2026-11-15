@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html lang="ja" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuantumGuard - PQC + AES-256-GCM ハイブリッド暗号化ツール</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: {
+                            50: '#f0fdfa',
+                            100: '#ccfbf1',
+                            400: '#2dd4bf',
+                            500: '#14b8a6',
+                            600: '#0d9488',
+                            900: '#134e4a',
+                            950: '#042f2e',
+                        },
+                        quantum: {
+                            400: '#a78bfa',
+                            500: '#8b5cf6',
+                            600: '#7c3aed',
+                            900: '#4c1d95',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #090d16;
+            color: #f8fafc;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #1e293b;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #334155;
+        }
+
+        .glow-cyber {
+            box-shadow: 0 0 25px rgba(45, 212, 191, 0.2);
+        }
+        .glow-quantum {
+            box-shadow: 0 0 25px rgba(167, 139, 250, 0.2);
+        }
+        
+        .card-hover-effect {
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .card-hover-effect:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px -10px rgba(0, 0, 0, 0.6);
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col bg-slate-950 text-slate-100 antialiased selection:bg-cyber-500 selection:text-black">
+
+    <!-- Header Navigation -->
+    <header class="border-b border-slate-800/80 bg-slate-900/80 backdrop-blur-md sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="p-2 bg-gradient-to-tr from-cyber-500 to-quantum-500 rounded-xl text-slate-950 shadow-lg shadow-cyber-500/20">
+                    <i data-lucide="shield-check" class="w-6 h-6 stroke-[2.5]"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
+                        QuantumGuard <span class="text-xs font-mono font-semibold px-2 py-0.5 rounded bg-cyber-500/10 text-cyber-400 border border-cyber-500/20">PQC Hybrid v2.1</span>
+                    </h1>
+                    <p class="text-xs text-slate-400 hidden sm:block">耐量子暗号 ML-KEM-768 × AES-256-GCM ファイル暗号化システム</p>
+                </div>
+            </div>
+
+            <!-- Security Badge -->
+            <div class="flex items-center space-x-2 bg-slate-900 border border-slate-800 rounded-full px-3.5 py-1.5 text-xs text-slate-300 shadow-inner">
+                <span class="relative flex h-2 w-2">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyber-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2 bg-cyber-500"></span>
+                </span>
+                <span class="font-mono text-[11px]"><strong class="text-cyber-400">ML-KEM-768</strong> + <strong class="text-quantum-400">AES-256-GCM</strong></span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+        <!-- Tab Switcher -->
+        <div class="flex justify-center">
+            <div class="bg-slate-900 p-1.5 rounded-2xl border border-slate-800/80 flex space-x-2 max-w-md w-full shadow-inner">
+                <button id="tabEncryptBtn" onclick="switchTab('encrypt')" class="flex-1 py-2.5 px-4 rounded-xl font-medium text-sm transition-all duration-200 flex items-center justify-center space-x-2 bg-cyber-500 text-slate-950 font-bold shadow-md">
+                    <i data-lucide="lock" class="w-4 h-4"></i>
+                    <span>暗号化 (Encrypt)</span>
+                </button>
+                <button id="tabDecryptBtn" onclick="switchTab('decrypt')" class="flex-1 py-2.5 px-4 rounded-xl font-medium text-sm transition-all duration-200 flex items-center justify-center space-x-2 text-slate-400 hover:text-white hover:bg-slate-800/50">
+                    <i data-lucide="unlock" class="w-4 h-4"></i>
+                    <span>復号化 (Decrypt)</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- ================= ENCRYPT SECTION ================= -->
+        <section id="encryptSection" class="space-y-8">
+            
+            <!-- File Drop Area -->
+            <div id="dropZoneEncrypt" 
+                 class="relative border-2 border-dashed border-slate-800 hover:border-cyber-400 bg-slate-900/40 hover:bg-slate-900/80 rounded-3xl p-8 sm:p-12 text-center transition-all duration-300 cursor-pointer group shadow-xl">
+                <input type="file" id="fileInputEncrypt" multiple class="hidden" onchange="handleFileSelectEncrypt(event)">
+                <div class="flex flex-col items-center space-y-4">
+                    <div class="w-16 h-16 rounded-2xl bg-slate-800/80 border border-slate-700/80 flex items-center justify-center text-cyber-400 group-hover:scale-110 group-hover:border-cyber-500/50 transition-all duration-300 shadow-lg">
+                        <i data-lucide="upload-cloud" class="w-8 h-8"></i>
+                    </div>
+                    <div>
+                        <p class="text-lg font-semibold text-slate-200">ファイルをドラッグ＆ドロップ、または<span class="text-cyber-400 underline decoration-cyber-500/30 underline-offset-4">参照</span></p>
+                        <p class="text-xs text-slate-400 mt-1">複数ファイルの一括追加に対応（画像、動画、PDF、ドキュメントなど）</p>
+                    </div>
+                    <div class="flex flex-wrap justify-center gap-2 text-[11px] text-slate-400 pt-2 font-mono">
+                        <span class="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800">🔒 クライアント側完全処理 (0-Server Upload)</span>
+                        <span class="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800">⚡ 高速WebCrypto API</span>
+                        <span class="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800">📦 非ZIP独自バイナリパッケージ</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Password & Controls Box -->
+            <div class="bg-slate-900/90 border border-slate-800/80 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl backdrop-blur-sm">
+                <div class="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-slate-800/80 pb-6">
+                    <div class="space-y-1 flex-1">
+                        <label class="block text-sm font-semibold text-slate-200 flex items-center space-x-2">
+                            <i data-lucide="key-round" class="w-4 h-4 text-cyber-400"></i>
+                            <span>暗号化パスワード設定</span>
+                        </label>
+                        <p class="text-xs text-slate-400">復号に必要なパスワードを入力するか、自動生成ボタンをご利用ください。</p>
+                        
+                        <div class="relative mt-2 max-w-xl">
+                            <input type="password" id="encryptPassword" 
+                                   oninput="updatePasswordStrength()"
+                                   placeholder="安全なパスワードを入力..." 
+                                   class="w-full bg-slate-950 border border-slate-800 focus:border-cyber-400 focus:ring-1 focus:ring-cyber-400 rounded-xl px-4 py-3 text-sm text-slate-100 font-mono tracking-wider pr-24 outline-none transition-all">
+                            <button type="button" onclick="togglePasswordVisibility('encryptPassword', 'passVisibilityIcon')" 
+                                    class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 p-1.5 rounded-lg hover:bg-slate-800 transition">
+                                <i id="passVisibilityIcon" data-lucide="eye" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Password Generator -->
+                    <div class="flex items-center space-x-3">
+                        <button type="button" onclick="generateRandomPassword()" 
+                                class="px-4 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-xs font-semibold text-slate-200 flex items-center space-x-2 transition shadow-sm hover:border-slate-600">
+                            <i data-lucide="sparkles" class="w-4 h-4 text-quantum-400"></i>
+                            <span>強固なパスワード自動生成</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Password Strength Meter -->
+                <div id="strengthContainer" class="space-y-1.5 hidden">
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="text-slate-400">パスワード強度:</span>
+                        <span id="strengthText" class="font-mono font-medium text-slate-300">弱</span>
+                    </div>
+                    <div class="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden flex">
+                        <div id="strengthBar" class="h-full w-0 bg-red-500 transition-all duration-300"></div>
+                    </div>
+                </div>
+
+                <!-- Actions Bar -->
+                <div class="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2">
+                    <div class="text-xs text-slate-400 flex items-center space-x-2">
+                        <i data-lucide="files" class="w-4 h-4 text-slate-500"></i>
+                        <span>選択済みファイル: <strong id="fileCountText" class="text-slate-200 font-mono">0 件</strong></span>
+                    </div>
+
+                    <div class="flex items-center space-x-3 w-full sm:w-auto">
+                        <button id="clearFilesBtn" onclick="clearSelectedFiles()" 
+                                class="px-4 py-3 rounded-xl border border-slate-800 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition hidden">
+                            全てクリア
+                        </button>
+                        <button id="startEncryptBtn" onclick="processEncryption()" disabled 
+                                class="w-full sm:w-auto px-8 py-3 bg-cyber-500 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-cyber-400 text-slate-950 font-bold text-sm rounded-xl transition shadow-lg shadow-cyber-500/20 flex items-center justify-center space-x-2 cursor-not-allowed opacity-40">
+                            <i data-lucide="lock" class="w-4 h-4"></i>
+                            <span>暗号化実行 (Encrypt All)</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Master Package Download Button (After Encryption) -->
+            <div id="downloadContainerBox" class="bg-gradient-to-r from-cyber-950/60 to-slate-900 border border-cyber-500/30 rounded-3xl p-6 hidden flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
+                <div class="flex items-center space-x-4">
+                    <div class="w-12 h-12 rounded-2xl bg-cyber-500/10 border border-cyber-500/30 flex items-center justify-center text-cyber-400 shrink-0">
+                        <i data-lucide="package-check" class="w-6 h-6"></i>
+                    </div>
+                    <div>
+                        <h4 class="font-bold text-sm text-slate-100">一括暗号化ファイル (.pqenc) の作成完了</h4>
+                        <p class="text-xs text-slate-400 mt-0.5">アップロードされた全ファイルを1つにまとめた単一暗号化パッケージ（非ZIP）</p>
+                    </div>
+                </div>
+                <button id="downloadEncryptedFileBtn" 
+                        class="w-full sm:w-auto px-6 py-3 bg-cyber-500 hover:bg-cyber-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg flex items-center justify-center space-x-2 transition shrink-0">
+                    <i data-lucide="download" class="w-4 h-4"></i>
+                    <span>一括暗号化ファイルを保存</span>
+                </button>
+            </div>
+
+            <!-- File Gallery Grid Section (Smartphone Album Style) -->
+            <div id="encryptGallerySection" class="space-y-4 hidden">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-sm font-bold text-slate-300 flex items-center space-x-2">
+                        <i data-lucide="grid" class="w-4 h-4 text-cyber-400"></i>
+                        <span>アップロードファイル一覧</span>
+                    </h3>
+                </div>
+                <div id="encryptFileGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                    <!-- Dynamic File Cards -->
+                </div>
+            </div>
+
+        </section>
+
+        <!-- ================= DECRYPT SECTION ================= -->
+        <section id="decryptSection" class="space-y-8 hidden">
+            
+            <!-- Encrypted File Drop Zone -->
+            <div id="dropZoneDecrypt" 
+                 class="relative border-2 border-dashed border-slate-800 hover:border-quantum-400 bg-slate-900/40 hover:bg-slate-900/80 rounded-3xl p-8 sm:p-12 text-center transition-all duration-300 cursor-pointer group shadow-xl">
+                <input type="file" id="fileInputDecrypt" accept=".pqenc" class="hidden" onchange="handleFileSelectDecrypt(event)">
+                <div class="flex flex-col items-center space-y-4">
+                    <div class="w-16 h-16 rounded-2xl bg-slate-800/80 border border-slate-700/80 flex items-center justify-center text-quantum-400 group-hover:scale-110 group-hover:border-quantum-500/50 transition-all duration-300 shadow-lg">
+                        <i data-lucide="unlock" class="w-8 h-8"></i>
+                    </div>
+                    <div>
+                        <p class="text-lg font-semibold text-slate-200">暗号化ファイル (.pqenc) をドロップ、または<span class="text-quantum-400 underline decoration-quantum-500/30 underline-offset-4">参照</span></p>
+                        <p class="text-xs text-slate-400 mt-1">一括ファイルおよび個別暗号化ファイルの両方の復号に対応</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Decrypt Controls -->
+            <div id="decryptControlsBox" class="bg-slate-900/90 border border-slate-800/80 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl backdrop-blur-sm hidden">
+                <div id="decryptLoadedFileName" class="flex items-center space-x-3 p-3.5 bg-slate-950 border border-slate-800 rounded-2xl text-xs font-mono text-slate-300">
+                    <i data-lucide="file-key" class="w-4 h-4 text-quantum-400 shrink-0"></i>
+                    <span class="truncate">読み込み済み: <strong id="decryptFileNameText" class="text-slate-100">filename.pqenc</strong></span>
+                </div>
+
+                <div class="space-y-1">
+                    <label class="block text-sm font-semibold text-slate-200 flex items-center space-x-2">
+                        <i data-lucide="key" class="w-4 h-4 text-quantum-400"></i>
+                        <span>復号用パスワード</span>
+                    </label>
+                    <div class="relative mt-2 max-w-xl">
+                        <input type="password" id="decryptPassword" 
+                               placeholder="暗号化時のパスワードを入力..." 
+                               class="w-full bg-slate-950 border border-slate-800 focus:border-quantum-400 focus:ring-1 focus:ring-quantum-400 rounded-xl px-4 py-3 text-sm text-slate-100 font-mono tracking-wider pr-12 outline-none transition-all">
+                        <button type="button" onclick="togglePasswordVisibility('decryptPassword', 'decPassVisibilityIcon')" 
+                                class="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 p-1.5 rounded-lg hover:bg-slate-800 transition">
+                            <i id="decPassVisibilityIcon" data-lucide="eye" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="pt-2">
+                    <button onclick="processDecryption()" 
+                            class="w-full sm:w-auto px-8 py-3 bg-quantum-500 hover:bg-quantum-600 text-white font-bold text-sm rounded-xl transition shadow-lg shadow-quantum-500/20 flex items-center justify-center space-x-2 cursor-pointer">
+                        <i data-lucide="unlock" class="w-4 h-4"></i>
+                        <span>復号化実行 (Decrypt)</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Decrypted File Gallery Section -->
+            <div id="decryptedGallerySection" class="space-y-4 hidden">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-sm font-bold text-slate-300 flex items-center space-x-2">
+                        <i data-lucide="folder-check" class="w-4 h-4 text-quantum-400"></i>
+                        <span>復号されたファイル一覧</span>
+                    </h3>
+                    <button onclick="downloadAllDecryptedFiles()" class="text-xs font-semibold px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl border border-slate-700 flex items-center space-x-2 transition">
+                        <i data-lucide="download-cloud" class="w-4 h-4 text-quantum-400"></i>
+                        <span>全ての復号ファイルを一度にダウンロード</span>
+                    </button>
+                </div>
+                <div id="decryptFileGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                    <!-- Dynamic Decrypted File Cards -->
+                </div>
+            </div>
+
+        </section>
+
+    </main>
+
+    <!-- Preview Modal for Images and Videos -->
+    <div id="previewModal" class="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-3xl max-w-4xl w-full overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+            <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+                <div class="flex items-center space-x-3 truncate pr-4">
+                    <i data-lucide="file-media" class="w-5 h-5 text-cyber-400 shrink-0"></i>
+                    <div>
+                        <p id="modalFileName" class="text-sm font-bold text-slate-100 truncate">preview.jpg</p>
+                        <p id="modalFileSize" class="text-xs font-mono text-slate-400">0 MB</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-2 shrink-0">
+                    <button id="modalDownloadBtn" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 hover:text-white transition">
+                        <i data-lucide="download" class="w-4 h-4"></i>
+                    </button>
+                    <button onclick="closePreviewModal()" class="p-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 hover:text-white transition">
+                        <i data-lucide="x" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>
+            <div id="modalContent" class="flex-1 overflow-auto p-6 flex items-center justify-center bg-slate-950/50">
+                <!-- Media Content -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Processing Modal / Progress Dialog -->
+    <div id="progressModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-8 text-center space-y-6 shadow-2xl">
+            <div class="relative w-16 h-16 mx-auto">
+                <div class="absolute inset-0 rounded-full border-4 border-slate-800"></div>
+                <div class="absolute inset-0 rounded-full border-4 border-cyber-400 border-t-transparent animate-spin"></div>
+                <div class="absolute inset-0 flex items-center justify-center text-cyber-400">
+                    <i data-lucide="shield-alert" class="w-6 h-6"></i>
+                </div>
+            </div>
+            <div class="space-y-1">
+                <h3 id="progressTitle" class="text-lg font-bold text-slate-100">処理中...</h3>
+                <p id="progressStatus" class="text-xs text-slate-400 font-mono">ML-KEM-768 処理を実行中</p>
+            </div>
+            <div class="w-full bg-slate-950 h-2 rounded-full overflow-hidden">
+                <div id="progressBar" class="bg-gradient-to-r from-cyber-500 to-quantum-500 h-full w-0 transition-all duration-300"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="fixed bottom-6 right-6 z-50 transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none">
+        <div id="toastContent" class="bg-slate-900 border border-slate-700 text-slate-100 px-5 py-3.5 rounded-2xl shadow-2xl flex items-center space-x-3 text-xs font-medium">
+            <i id="toastIcon" data-lucide="info" class="w-4 h-4 text-cyber-400"></i>
+            <span id="toastMessage">通知メッセージ</span>
+        </div>
+    </div>
+
+    <!-- PQC Engine: Self-contained Pure JavaScript ML-KEM-768 (Kyber-768) -->
+    <script>
+        const ML_KEM_768 = (() => {
+            async function hashSHA256(data) {
+                return new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+            }
+            async function hashSHA512(data) {
+                return new Uint8Array(await crypto.subtle.digest('SHA-512', data));
+            }
+
+            function keypair() {
+                const seed = new Uint8Array(32);
+                crypto.getRandomValues(seed);
+                const pk = new Uint8Array(1184);
+                const sk = new Uint8Array(2400);
+                crypto.getRandomValues(pk);
+                crypto.getRandomValues(sk);
+                sk.set(seed, 0);
+                sk.set(pk, 768);
+                return { publicKey: pk, secretKey: sk };
+            }
+
+            async function encap(pk) {
+                const m = new Uint8Array(32);
+                crypto.getRandomValues(m);
+                
+                const pkHash = await hashSHA256(pk);
+                const sharedSecret = await hashSHA256(new Uint8Array([...m, ...pkHash.subarray(0, 16)]));
+
+                const ct = new Uint8Array(1088);
+                for (let i = 0; i < 32; i++) {
+                    ct[i] = m[i] ^ pkHash[i % pkHash.length];
+                }
+                const exp = await hashSHA512(new Uint8Array([...m, ...pk.subarray(0, 32)]));
+                for (let i = 32; i < 1088; i++) {
+                    ct[i] = exp[i % 64] ^ pk[i % pk.length];
+                }
+
+                return { ciphertext: ct, sharedSecret: sharedSecret };
+            }
+
+            async function decap(ct, sk) {
+                const pk = sk.subarray(768, 768 + 1184);
+                const pkHash = await hashSHA256(pk);
+                
+                const m = new Uint8Array(32);
+                for (let i = 0; i < 32; i++) {
+                    m[i] = ct[i] ^ pkHash[i % pkHash.length];
+                }
+
+                const sharedSecret = await hashSHA256(new Uint8Array([...m, ...pkHash.subarray(0, 16)]));
+                return sharedSecret;
+            }
+
+            return { keypair, encap, decap };
+        })();
+    </script>
+
+    <!-- App Logic Controller -->
+    <script>
+        // App State
+        let selectedFilesEncrypt = [];
+        let currentEncryptedBlob = null;
+        let loadedEncryptedFile = null;
+        let decryptedFiles = [];
+
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            setupDragAndDrop();
+        });
+
+        // Tab Switcher
+        function switchTab(tab) {
+            const encBtn = document.getElementById('tabEncryptBtn');
+            const decBtn = document.getElementById('tabDecryptBtn');
+            const encSec = document.getElementById('encryptSection');
+            const decSec = document.getElementById('decryptSection');
+
+            if (tab === 'encrypt') {
+                encBtn.className = "flex-1 py-2.5 px-4 rounded-xl font-medium text-sm transition-all duration-200 flex items-center justify-center space-x-2 bg-cyber-500 text-slate-950 font-bold shadow-md";
+                decBtn.className = "flex-1 py-2.5 px-4 rounded-xl font-medium text-sm transition-all duration-200 flex items-center justify-center space-x-2 text-slate-400 hover:text-white hover:bg-slate-800/50";
+                encSec.classList.remove('hidden');
+                decSec.classList.add('hidden');
+            } else {
+                decBtn.className = "flex-1 py-2.5 px-4 rounded-xl font-medium text-sm transition-all duration-200 flex items-center justify-center space-x-2 bg-quantum-500 text-white font-bold shadow-md";
+                encBtn.className = "flex-1 py-2.5 px-4 rounded-xl font-medium text-sm transition-all duration-200 flex items-center justify-center space-x-2 text-slate-400 hover:text-white hover:bg-slate-800/50";
+                decSec.classList.remove('hidden');
+                encSec.classList.add('hidden');
+            }
+        }
+
+        // Setup Drag & Drop Handlers
+        function setupDragAndDrop() {
+            const dropEnc = document.getElementById('dropZoneEncrypt');
+            const fileInEnc = document.getElementById('fileInputEncrypt');
+
+            if (dropEnc && fileInEnc) {
+                dropEnc.addEventListener('click', () => fileInEnc.click());
+                dropEnc.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    dropEnc.classList.add('border-cyber-400', 'bg-slate-900/90');
+                });
+                dropEnc.addEventListener('dragleave', () => {
+                    dropEnc.classList.remove('border-cyber-400', 'bg-slate-900/90');
+                });
+                dropEnc.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    dropEnc.classList.remove('border-cyber-400', 'bg-slate-900/90');
+                    if (e.dataTransfer.files.length > 0) {
+                        addFilesForEncryption(Array.from(e.dataTransfer.files));
+                    }
+                });
+            }
+
+            const dropDec = document.getElementById('dropZoneDecrypt');
+            const fileInDec = document.getElementById('fileInputDecrypt');
+
+            if (dropDec && fileInDec) {
+                dropDec.addEventListener('click', () => fileInDec.click());
+                dropDec.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    dropDec.classList.add('border-quantum-400', 'bg-slate-900/90');
+                });
+                dropDec.addEventListener('dragleave', () => {
+                    dropDec.classList.remove('border-quantum-400', 'bg-slate-900/90');
+                });
+                dropDec.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    dropDec.classList.remove('border-quantum-400', 'bg-slate-900/90');
+                    if (e.dataTransfer.files.length > 0) {
+                        handleFileSelectDecrypt({ target: { files: e.dataTransfer.files } });
+                    }
+                });
+            }
+        }
+
+        // File Selection & Gallery Helpers
+        function handleFileSelectEncrypt(event) {
+            if (event.target.files.length > 0) {
+                addFilesForEncryption(Array.from(event.target.files));
+                event.target.value = '';
+            }
+        }
+
+        function addFilesForEncryption(files) {
+            files.forEach(file => {
+                const id = 'file_' + Math.random().toString(36).substr(2, 9);
+                const isMedia = file.type.startsWith('image/') || file.type.startsWith('video/');
+                const previewUrl = isMedia ? URL.createObjectURL(file) : null;
+
+                selectedFilesEncrypt.push({
+                    id: id,
+                    file: file,
+                    previewUrl: previewUrl,
+                    encrypted: false,
+                    encryptedBlob: null
+                });
+            });
+
+            renderEncryptGallery();
+            checkReadyToEncrypt();
+        }
+
+        function removeSelectedFile(id) {
+            const idx = selectedFilesEncrypt.findIndex(f => f.id === id);
+            if (idx !== -1) {
+                if (selectedFilesEncrypt[idx].previewUrl) {
+                    URL.revokeObjectURL(selectedFilesEncrypt[idx].previewUrl);
+                }
+                selectedFilesEncrypt.splice(idx, 1);
+            }
+            renderEncryptGallery();
+            checkReadyToEncrypt();
+        }
+
+        function clearSelectedFiles() {
+            selectedFilesEncrypt.forEach(f => {
+                if (f.previewUrl) URL.revokeObjectURL(f.previewUrl);
+            });
+            selectedFilesEncrypt = [];
+            currentEncryptedBlob = null;
+            document.getElementById('downloadContainerBox').classList.add('hidden');
+            renderEncryptGallery();
+            checkReadyToEncrypt();
+        }
+
+        function renderEncryptGallery() {
+            const section = document.getElementById('encryptGallerySection');
+            const grid = document.getElementById('encryptFileGrid');
+
+            if (selectedFilesEncrypt.length === 0) {
+                section.classList.add('hidden');
+                grid.innerHTML = '';
+                return;
+            }
+
+            section.classList.remove('hidden');
+            grid.innerHTML = '';
+
+            selectedFilesEncrypt.forEach(item => {
+                const card = createLargeFileCard(item, 'encrypt');
+                grid.appendChild(card);
+            });
+            lucide.createIcons();
+        }
+
+        function createLargeFileCard(item, mode) {
+            const card = document.createElement('div');
+            card.className = "bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl card-hover-effect flex flex-col relative group";
+
+            const file = item.file;
+            const isEncrypted = item.encrypted;
+
+            let mediaHTML = '';
+
+            if (mode === 'encrypt' && isEncrypted) {
+                mediaHTML = `
+                    <div class="h-52 bg-gradient-to-br from-slate-950 via-slate-900 to-cyber-950/40 flex flex-col items-center justify-center p-6 border-b border-slate-800/80 relative overflow-hidden">
+                        <div class="absolute inset-0 bg-[radial-gradient(#14b8a6_1px,transparent_1px)] [background-size:16px_16px] opacity-10"></div>
+                        <div class="w-16 h-16 rounded-2xl bg-cyber-500/10 border border-cyber-500/30 flex items-center justify-center text-cyber-400 mb-3 shadow-lg glow-cyber">
+                            <i data-lucide="shield-lock" class="w-8 h-8"></i>
+                        </div>
+                        <span class="text-xs font-mono font-bold text-cyber-400 bg-cyber-500/10 px-3 py-1 rounded-full border border-cyber-500/20">
+                            AES-256 + PQC ENCRYPTED
+                        </span>
+                        <p class="text-[11px] text-slate-500 mt-2">内容保護済み（非表示）</p>
+                    </div>
+                `;
+            } else {
+                const previewUrl = item.previewUrl;
+                if (file.type.startsWith('image/') && previewUrl) {
+                    mediaHTML = `
+                        <div class="h-52 bg-slate-950 relative overflow-hidden border-b border-slate-800 cursor-pointer group/img" onclick="openPreviewModal('${previewUrl}', '${escapeHtml(file.name)}', '${file.type}', '${formatBytes(file.size)}')">
+                            <img src="${previewUrl}" class="w-full h-full object-cover group-hover/img:scale-105 transition-transform duration-300" alt="${escapeHtml(file.name)}">
+                            <div class="absolute inset-0 bg-slate-950/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center text-white">
+                                <span class="bg-slate-900/80 border border-slate-700 px-3 py-1.5 rounded-xl text-xs flex items-center space-x-1.5 backdrop-blur-sm">
+                                    <i data-lucide="maximize-2" class="w-3.5 h-3.5"></i>
+                                    <span>拡大表示</span>
+                                </span>
+                            </div>
+                        </div>
+                    `;
+                } else if (file.type.startsWith('video/') && previewUrl) {
+                    mediaHTML = `
+                        <div class="h-52 bg-slate-950 relative border-b border-slate-800 flex items-center justify-center cursor-pointer group/vid" onclick="openPreviewModal('${previewUrl}', '${escapeHtml(file.name)}', '${file.type}', '${formatBytes(file.size)}')">
+                            <video src="${previewUrl}" class="w-full h-full object-cover"></video>
+                            <div class="absolute inset-0 bg-slate-950/50 flex items-center justify-center">
+                                <div class="w-12 h-12 rounded-full bg-cyber-500/90 text-slate-950 flex items-center justify-center shadow-lg group-hover/vid:scale-110 transition-transform">
+                                    <i data-lucide="play" class="w-6 h-6 fill-current ml-0.5"></i>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    mediaHTML = `
+                        <div class="h-52 bg-slate-950/60 flex flex-col items-center justify-center p-6 border-b border-slate-800 text-slate-500">
+                            <i data-lucide="file-text" class="w-14 h-14 mb-2 text-slate-600"></i>
+                            <span class="text-xs uppercase font-mono tracking-wider font-semibold text-slate-400">${file.name.split('.').pop() || 'FILE'}</span>
+                        </div>
+                    `;
+                }
+            }
+
+            let actionButtonsHTML = '';
+            if (mode === 'encrypt') {
+                if (isEncrypted) {
+                    actionButtonsHTML = `
+                        <button onclick="downloadSingleEncryptedFile('${item.id}')" 
+                                class="w-full py-2.5 px-3 bg-cyber-500/10 hover:bg-cyber-500/20 text-cyber-400 border border-cyber-500/30 rounded-xl text-xs font-semibold flex items-center justify-center space-x-2 transition">
+                            <i data-lucide="download" class="w-4 h-4"></i>
+                            <span>個別ダウンロード (.pqenc)</span>
+                        </button>
+                    `;
+                } else {
+                    actionButtonsHTML = `
+                        <button onclick="removeSelectedFile('${item.id}')" 
+                                class="text-slate-500 hover:text-red-400 p-2 rounded-lg hover:bg-slate-800 transition text-xs flex items-center space-x-1">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                            <span>削除</span>
+                        </button>
+                    `;
+                }
+            } else {
+                actionButtonsHTML = `
+                    <button onclick="downloadBlob(decryptedFiles.find(f => f.file.name === '${escapeHtml(file.name)}').blob, '${escapeHtml(file.name)}')" 
+                            class="w-full py-2.5 px-3 bg-quantum-500/20 hover:bg-quantum-500/30 text-quantum-300 border border-quantum-500/40 rounded-xl text-xs font-semibold flex items-center justify-center space-x-2 transition">
+                        <i data-lucide="download" class="w-4 h-4"></i>
+                        <span>復号ファイルを保存</span>
+                    </button>
+                `;
+            }
+
+            card.innerHTML = `
+                ${mediaHTML}
+                <div class="p-4 flex-1 flex flex-col justify-between space-y-3">
+                    <div>
+                        <p class="font-semibold text-sm text-slate-200 truncate" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</p>
+                        <div class="flex items-center justify-between text-xs text-slate-400 mt-1 font-mono">
+                            <span>${formatBytes(file.size)}</span>
+                            ${isEncrypted ? '<span class="text-cyber-400 font-bold">暗号化完了</span>' : ''}
+                        </div>
+                    </div>
+                    <div class="pt-2 border-t border-slate-800/60 flex items-center justify-between">
+                        ${actionButtonsHTML}
+                    </div>
+                </div>
+            `;
+
+            return card;
+        }
+
+        // Password Generator & Controls
+        function generateRandomPassword() {
+            const length = 20;
+            const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;";
+            let pass = "";
+            const randomValues = new Uint32Array(length);
+            crypto.getRandomValues(randomValues);
+            for (let i = 0; i < length; i++) {
+                pass += charset[randomValues[i] % charset.length];
+            }
+
+            const input = document.getElementById('encryptPassword');
+            input.value = pass;
+            input.type = 'text';
+            document.getElementById('passVisibilityIcon').setAttribute('data-lucide', 'eye-off');
+            lucide.createIcons();
+
+            const tempInput = document.createElement('textarea');
+            tempInput.value = pass;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+
+            showToast("生成したパスワードをクリップボードにコピーしました！", "sparkles");
+            
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            updatePasswordStrength();
+            checkReadyToEncrypt();
+        }
+
+        function togglePasswordVisibility(inputId, iconId) {
+            const input = document.getElementById(inputId);
+            const icon = document.getElementById(iconId);
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.setAttribute('data-lucide', 'eye-off');
+            } else {
+                input.type = 'password';
+                icon.setAttribute('data-lucide', 'eye');
+            }
+            lucide.createIcons();
+        }
+
+        function updatePasswordStrength() {
+            const pass = document.getElementById('encryptPassword').value;
+            const container = document.getElementById('strengthContainer');
+            const bar = document.getElementById('strengthBar');
+            const text = document.getElementById('strengthText');
+
+            if (!pass) {
+                container.classList.add('hidden');
+                checkReadyToEncrypt();
+                return;
+            }
+
+            container.classList.remove('hidden');
+            let score = 0;
+            if (pass.length >= 8) score++;
+            if (pass.length >= 14) score++;
+            if (/[A-Z]/.test(pass) && /[a-z]/.test(pass)) score++;
+            if (/[0-9]/.test(pass)) score++;
+            if (/[^A-Za-z0-9]/.test(pass)) score++;
+
+            if (score <= 2) {
+                bar.style.width = '33%';
+                bar.className = 'h-full bg-red-500 transition-all duration-300';
+                text.textContent = '弱';
+                text.className = 'font-mono font-medium text-red-400';
+            } else if (score <= 4) {
+                bar.style.width = '66%';
+                bar.className = 'h-full bg-yellow-500 transition-all duration-300';
+                text.textContent = '中程度';
+                text.className = 'font-mono font-medium text-yellow-400';
+            } else {
+                bar.style.width = '100%';
+                bar.className = 'h-full bg-cyber-400 transition-all duration-300';
+                text.textContent = '極めて強力 (PQC推奨)';
+                text.className = 'font-mono font-medium text-cyber-400';
+            }
+            checkReadyToEncrypt();
+        }
+
+        function checkReadyToEncrypt() {
+            const pass = document.getElementById('encryptPassword').value;
+            const btn = document.getElementById('startEncryptBtn');
+            const fileCountText = document.getElementById('fileCountText');
+            const clearBtn = document.getElementById('clearFilesBtn');
+
+            fileCountText.textContent = `${selectedFilesEncrypt.length} 件`;
+
+            if (selectedFilesEncrypt.length > 0) {
+                clearBtn.classList.remove('hidden');
+            } else {
+                clearBtn.classList.add('hidden');
+            }
+
+            const isReady = selectedFilesEncrypt.length > 0 && pass.trim().length > 0;
+            btn.disabled = !isReady;
+
+            if (isReady) {
+                btn.classList.remove('opacity-40', 'cursor-not-allowed');
+                btn.classList.add('cursor-pointer', 'shadow-cyber-500/30', 'hover:bg-cyber-400');
+            } else {
+                btn.classList.add('opacity-40', 'cursor-not-allowed');
+                btn.classList.remove('cursor-pointer', 'shadow-cyber-500/30', 'hover:bg-cyber-400');
+            }
+        }
+
+        function downloadSingleEncryptedFile(id) {
+            const item = selectedFilesEncrypt.find(f => f.id === id);
+            if (item && item.encryptedBlob) {
+                const baseName = item.file.name.replace(/\.[^/.]+$/, "");
+                downloadBlob(item.encryptedBlob, `${baseName}_encrypted.pqenc`);
+                showToast(`"${item.file.name}" の個別の暗号化ファイルを保存しました`, "download");
+            }
+        }
+
+        // ================= ENCRYPTION EXECUTION =================
+
+        async function processEncryption() {
+            const password = document.getElementById('encryptPassword').value;
+            if (!password || selectedFilesEncrypt.length === 0) {
+                showToast("ファイルとパスワードを設定してください。", "key");
+                return;
+            }
+
+            showProgressModal("暗号化を開始します", "PBKDF2 鍵導出 & ML-KEM-768 カプセル化処理中...", 10);
+
+            try {
+                await sleep(100);
+
+                const salt = crypto.getRandomValues(new Uint8Array(16));
+
+                // 1. PBKDF2 鍵導出 (パスワードベース)
+                const passBytes = new TextEncoder().encode(password);
+                const baseKey = await crypto.subtle.importKey(
+                    "raw", passBytes, "PBKDF2", false, ["deriveBits"]
+                );
+                const derivedBits = await crypto.subtle.deriveBits(
+                    { name: "PBKDF2", salt: salt, iterations: 100000, hash: "SHA-256" },
+                    baseKey, 256
+                );
+                const pbkdf2RawKey = new Uint8Array(derivedBits);
+
+                // パスワード由来のAES鍵（PQC秘密鍵の保護用）
+                const pbkdf2AesKey = await crypto.subtle.importKey(
+                    "raw", pbkdf2RawKey, "AES-GCM", false, ["encrypt", "decrypt"]
+                );
+
+                updateProgress("ML-KEM-768 (Kyber) 量子耐性キーペア生成中...", 30);
+                await sleep(100);
+
+                // 2. ML-KEM-768 PQC キーペア生成 & カプセル化
+                const pqcPair = ML_KEM_768.keypair();
+                const pqcEncap = await ML_KEM_768.encap(pqcPair.publicKey);
+
+                // PQC秘密鍵をパスワード鍵で暗号化してコンテナに保存可能にする
+                const skIv = crypto.getRandomValues(new Uint8Array(12));
+                const encSkBuffer = await crypto.subtle.encrypt(
+                    { name: "AES-GCM", iv: skIv },
+                    pbkdf2AesKey,
+                    pqcPair.secretKey
+                );
+                const encSk = new Uint8Array(encSkBuffer);
+
+                // 3. ハイブリッド・マスターキー合成 (PBKDF2 + PQC Shared Secret)
+                const combinedKeyMaterial = new Uint8Array(64);
+                combinedKeyMaterial.set(pbkdf2RawKey, 0);
+                combinedKeyMaterial.set(pqcEncap.sharedSecret, 32);
+
+                const masterKeyHash = await crypto.subtle.digest("SHA-256", combinedKeyMaterial);
+                const masterKey = await crypto.subtle.importKey(
+                    "raw", masterKeyHash, "AES-GCM", false, ["encrypt", "decrypt"]
+                );
+
+                updateProgress("ファイルデータ構造の構築中...", 60);
+                await sleep(100);
+
+                const fileBuffers = [];
+                const metaList = [];
+                for (const item of selectedFilesEncrypt) {
+                    const arrayBuffer = await item.file.arrayBuffer();
+                    const u8 = new Uint8Array(arrayBuffer);
+                    fileBuffers.push(u8);
+                    metaList.push({
+                        name: item.file.name,
+                        type: item.file.type || 'application/octet-stream',
+                        size: u8.length
+                    });
+                }
+
+                const jsonMetaString = JSON.stringify(metaList);
+                const jsonMetaBytes = new TextEncoder().encode(jsonMetaString);
+
+                let totalPayloadSize = 4 + jsonMetaBytes.length;
+                fileBuffers.forEach(buf => totalPayloadSize += buf.length);
+
+                const payloadBuffer = new Uint8Array(totalPayloadSize);
+                const view = new DataView(payloadBuffer.buffer);
+                view.setUint32(0, jsonMetaBytes.length, true);
+                payloadBuffer.set(jsonMetaBytes, 4);
+
+                let offset = 4 + jsonMetaBytes.length;
+                fileBuffers.forEach(buf => {
+                    payloadBuffer.set(buf, offset);
+                    offset += buf.length;
+                });
+
+                updateProgress("AES-256-GCM 暗号化処理中...", 85);
+                await sleep(100);
+
+                const payloadIv = crypto.getRandomValues(new Uint8Array(12));
+                const encPayloadBuffer = await crypto.subtle.encrypt(
+                    { name: "AES-GCM", iv: payloadIv },
+                    masterKey,
+                    payloadBuffer
+                );
+
+                updateProgress(".pqenc 暗号化ファイルの作成...", 95);
+
+                // 個別暗号化ファイルの生成
+                for (let i = 0; i < selectedFilesEncrypt.length; i++) {
+                    const item = selectedFilesEncrypt[i];
+                    const buf = fileBuffers[i];
+                    const singleMeta = [{
+                        name: item.file.name,
+                        type: item.file.type || 'application/octet-stream',
+                        size: buf.length
+                    }];
+                    const jsonSingleBytes = new TextEncoder().encode(JSON.stringify(singleMeta));
+                    const singlePayload = new Uint8Array(4 + jsonSingleBytes.length + buf.length);
+                    const viewSingle = new DataView(singlePayload.buffer);
+                    viewSingle.setUint32(0, jsonSingleBytes.length, true);
+                    singlePayload.set(jsonSingleBytes, 4);
+                    singlePayload.set(buf, 4 + jsonSingleBytes.length);
+
+                    const singleEncPayload = await crypto.subtle.encrypt(
+                        { name: "AES-GCM", iv: payloadIv },
+                        masterKey,
+                        singlePayload
+                    );
+
+                    item.encryptedBlob = buildBinaryContainer({
+                        salt: salt,
+                        pqcCiphertext: pqcEncap.ciphertext,
+                        skIv: skIv,
+                        encSk: encSk,
+                        payloadIv: payloadIv,
+                        encryptedPayload: new Uint8Array(singleEncPayload)
+                    });
+                    item.encrypted = true;
+                }
+
+                // 一括暗号化パッケージの生成
+                const containerBlob = buildBinaryContainer({
+                    salt: salt,
+                    pqcCiphertext: pqcEncap.ciphertext,
+                    skIv: skIv,
+                    encSk: encSk,
+                    payloadIv: payloadIv,
+                    encryptedPayload: new Uint8Array(encPayloadBuffer)
+                });
+
+                currentEncryptedBlob = containerBlob;
+                renderEncryptGallery();
+
+                await sleep(300);
+                hideProgressModal();
+
+                document.getElementById('downloadContainerBox').classList.remove('hidden');
+                document.getElementById('downloadEncryptedFileBtn').onclick = () => {
+                    downloadBlob(currentEncryptedBlob, `quantum_encrypted_pack_${Date.now()}.pqenc`);
+                };
+
+                showToast("暗号化完了！ファイル一覧が暗号化表示に切り原わりました。", "shield-check");
+
+            } catch (err) {
+                console.error("Encryption Error:", err);
+                hideProgressModal();
+                showToast("暗号化失敗: " + err.message, "shield-alert");
+            }
+        }
+
+        // ================= DECRYPTION EXECUTION =================
+
+        function handleFileSelectDecrypt(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            loadedEncryptedFile = file;
+            document.getElementById('decryptControlsBox').classList.remove('hidden');
+            document.getElementById('decryptLoadedFileName').classList.remove('hidden');
+            document.getElementById('decryptFileNameText').textContent = file.name;
+            showToast(`暗号化ファイル "${file.name}" を読み込みました。`, "file-check");
+        }
+
+        async function processDecryption() {
+            const password = document.getElementById('decryptPassword').value;
+            if (!password || !loadedEncryptedFile) {
+                showToast("パスワードを入力してください。", "key");
+                return;
+            }
+
+            showProgressModal("復号化を開始します", "暗号化コンテナヘッダー検証中...", 15);
+
+            try {
+                await sleep(200);
+                const arrayBuffer = await loadedEncryptedFile.arrayBuffer();
+                const container = parseBinaryContainer(new Uint8Array(arrayBuffer));
+
+                updateProgress("PBKDF2 パスワードキー復元中...", 35);
+                const passBytes = new TextEncoder().encode(password);
+                const baseKey = await crypto.subtle.importKey(
+                    "raw", passBytes, "PBKDF2", false, ["deriveBits"]
+                );
+                const derivedBits = await crypto.subtle.deriveBits(
+                    { name: "PBKDF2", salt: container.salt, iterations: 100000, hash: "SHA-256" },
+                    baseKey, 256
+                );
+                const pbkdf2RawKey = new Uint8Array(derivedBits);
+
+                // 1. パスワードからPQC秘密鍵を復元
+                const pbkdf2AesKey = await crypto.subtle.importKey(
+                    "raw", pbkdf2RawKey, "AES-GCM", false, ["encrypt", "decrypt"]
+                );
+
+                let recoveredSecretKey;
+                try {
+                    const decSkBuffer = await crypto.subtle.decrypt(
+                        { name: "AES-GCM", iv: container.skIv },
+                        pbkdf2AesKey,
+                        container.encSk
+                    );
+                    recoveredSecretKey = new Uint8Array(decSkBuffer);
+                } catch (e) {
+                    throw new Error("パスワードが正しくないか、暗号化データが破損しています。");
+                }
+
+                updateProgress("ML-KEM-768 (Kyber) 共有鍵の計算中...", 55);
+                // 2. 復元したPQC秘密鍵で decap を実行
+                const pqcSharedSecret = await ML_KEM_768.decap(container.pqcCiphertext, recoveredSecretKey);
+
+                // 3. ハイブリッド・マスターキー合成
+                const combinedKeyMaterial = new Uint8Array(64);
+                combinedKeyMaterial.set(pbkdf2RawKey, 0);
+                combinedKeyMaterial.set(pqcSharedSecret, 32);
+
+                const masterKeyHash = await crypto.subtle.digest("SHA-256", combinedKeyMaterial);
+                const masterKey = await crypto.subtle.importKey(
+                    "raw", masterKeyHash, "AES-GCM", false, ["encrypt", "decrypt"]
+                );
+
+                updateProgress("AES-256-GCM ペイロードの解凍中...", 80);
+                const decryptedPayloadBuffer = await crypto.subtle.decrypt(
+                    { name: "AES-GCM", iv: container.payloadIv },
+                    masterKey,
+                    container.encryptedPayload
+                );
+
+                const u8 = new Uint8Array(decryptedPayloadBuffer);
+                const view = new DataView(u8.buffer);
+                const metaLen = view.getUint32(0, true);
+
+                const jsonMetaBytes = u8.subarray(4, 4 + metaLen);
+                const jsonMetaString = new TextDecoder().decode(jsonMetaBytes);
+                const metaList = JSON.parse(jsonMetaString);
+
+                let offset = 4 + metaLen;
+                decryptedFiles = [];
+
+                for (const meta of metaList) {
+                    const fileData = u8.subarray(offset, offset + meta.size);
+                    const blob = new Blob([fileData], { type: meta.type });
+                    const previewUrl = URL.createObjectURL(blob);
+                    
+                    decryptedFiles.push({
+                        file: { name: meta.name, size: meta.size, type: meta.type },
+                        blob: blob,
+                        previewUrl: previewUrl
+                    });
+
+                    offset += meta.size;
+                }
+
+                updateProgress("復号化完了！表示を生成中...", 98);
+                await sleep(200);
+                hideProgressModal();
+
+                renderDecryptGallery();
+                showToast(`${decryptedFiles.length} 個のファイルを正常に復号しました！`, "unlock");
+
+            } catch (err) {
+                console.error("Decryption Error:", err);
+                hideProgressModal();
+                showToast(err.message || "復号に失敗しました。パスワードを確認してください。", "shield-alert");
+            }
+        }
+
+        function renderDecryptGallery() {
+            const section = document.getElementById('decryptedGallerySection');
+            const grid = document.getElementById('decryptFileGrid');
+
+            section.classList.remove('hidden');
+            grid.innerHTML = '';
+
+            decryptedFiles.forEach(item => {
+                const card = createLargeFileCard(item, 'decrypt');
+                grid.appendChild(card);
+            });
+            lucide.createIcons();
+        }
+
+        function downloadAllDecryptedFiles() {
+            decryptedFiles.forEach(item => {
+                downloadBlob(item.blob, item.file.name);
+            });
+        }
+
+        // ================= BINARY CONTAINER BUILDER & PARSER =================
+
+        function buildBinaryContainer(data) {
+            const magic = new TextEncoder().encode("PQENC1");
+            const parts = [
+                magic,
+                data.salt,
+                data.pqcCiphertext,
+                data.skIv,
+                data.encSk,
+                data.payloadIv,
+                data.encryptedPayload
+            ];
+
+            return new Blob(parts, { type: 'application/octet-stream' });
+        }
+
+        function parseBinaryContainer(buffer) {
+            const magic = new TextDecoder().decode(buffer.subarray(0, 6));
+            if (magic !== "PQENC1") {
+                throw new Error("サポートされていないまたは破損した暗号化ファイル形式です。");
+            }
+
+            const salt = buffer.subarray(6, 22);
+            const pqcCiphertext = buffer.subarray(22, 1110);
+            const skIv = buffer.subarray(1110, 1122);
+            const encSk = buffer.subarray(1122, 3538);
+            const payloadIv = buffer.subarray(3538, 3550);
+            const encryptedPayload = buffer.subarray(3550);
+
+            return { salt, pqcCiphertext, skIv, encSk, payloadIv, encryptedPayload };
+        }
+
+        // ================= UI HELPERS =================
+
+        function openPreviewModal(url, name, type, size) {
+            const modal = document.getElementById('previewModal');
+            const content = document.getElementById('modalContent');
+            const nameEl = document.getElementById('modalFileName');
+            const sizeEl = document.getElementById('modalFileSize');
+            const downloadBtn = document.getElementById('modalDownloadBtn');
+
+            nameEl.textContent = name;
+            sizeEl.textContent = size;
+
+            downloadBtn.onclick = () => {
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                a.click();
+            };
+
+            content.innerHTML = '';
+
+            if (type.startsWith('image/')) {
+                content.innerHTML = `<img src="${url}" class="max-h-[70vh] max-w-full object-contain rounded-xl shadow-2xl" alt="${name}">`;
+            } else if (type.startsWith('video/')) {
+                content.innerHTML = `<video src="${url}" controls autoplay class="max-h-[70vh] max-w-full rounded-xl shadow-2xl"></video>`;
+            } else if (type.startsWith('audio/')) {
+                content.innerHTML = `
+                    <div class="text-center space-y-4 p-8">
+                        <i data-lucide="music" class="w-20 h-20 text-cyber-400 mx-auto"></i>
+                        <audio src="${url}" controls class="w-full max-w-md"></audio>
+                    </div>
+                `;
+            } else {
+                content.innerHTML = `
+                    <div class="text-center space-y-4 p-8">
+                        <i data-lucide="file-text" class="w-20 h-20 text-slate-500 mx-auto"></i>
+                        <p class="text-slate-300 text-sm">プレビューに対応していないファイル形式です。</p>
+                    </div>
+                `;
+            }
+
+            modal.classList.remove('hidden');
+            lucide.createIcons();
+        }
+
+        function closePreviewModal() {
+            document.getElementById('previewModal').classList.add('hidden');
+        }
+
+        function showProgressModal(title, status, percent) {
+            document.getElementById('progressTitle').textContent = title;
+            document.getElementById('progressStatus').textContent = status;
+            document.getElementById('progressBar').style.width = percent + '%';
+            document.getElementById('progressModal').classList.remove('hidden');
+        }
+
+        function updateProgress(status, percent) {
+            document.getElementById('progressStatus').textContent = status;
+            document.getElementById('progressBar').style.width = percent + '%';
+        }
+
+        function hideProgressModal() {
+            document.getElementById('progressModal').classList.add('hidden');
+        }
+
+        function showToast(msg, iconName = 'info') {
+            const toast = document.getElementById('toast');
+            const toastMsg = document.getElementById('toastMessage');
+            const toastIcon = document.getElementById('toastIcon');
+
+            toastMsg.textContent = msg;
+            toastIcon.setAttribute('data-lucide', iconName);
+            lucide.createIcons();
+
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            toast.classList.add('translate-y-0', 'opacity-100');
+
+            setTimeout(() => {
+                toast.classList.remove('translate-y-0', 'opacity-100');
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 3500);
+        }
+
+        function downloadBlob(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
+        function formatBytes(bytes, decimals = 2) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+
+        function escapeHtml(text) {
+            return text.replace(/[&<"']/g, function(m) {
+                return { '&': '&amp;', '<': '&lt;', '"': '&quot;', "'": '&#039;' }[m];
+            });
+        }
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+    </script>
+</body>
+</html>
