@@ -169,6 +169,19 @@
                         </div>
                     </div>
 
+                    <div class="flex items-center space-x-3">
+                        <button type="button" onclick="setEncryptAuthMode('passkey')"
+                                class="px-4 py-3 bg-quantum-900/40 hover:bg-quantum-900/60 border border-quantum-500/40 rounded-xl text-xs font-semibold text-quantum-300 flex items-center space-x-2 transition">
+                            <i data-lucide="fingerprint" class="w-4 h-4"></i>
+                            <span>パスキーを使用</span>
+                        </button>
+                        <button type="button" id="cancelPasskeyModeButton" onclick="setEncryptAuthMode('password')"
+                                class="hidden px-4 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-xs font-semibold text-slate-200 items-center space-x-2 transition">
+                            <i data-lucide="key-round" class="w-4 h-4"></i>
+                            <span>パスワードに戻す</span>
+                        </button>
+                    </div>
+
                     <!-- Password Generator -->
                     <div class="flex items-center space-x-3">
                         <button type="button" onclick="generateRandomPassword()" 
@@ -178,6 +191,8 @@
                         </button>
                     </div>
                 </div>
+
+                <p id="encryptPasskeyStatus" class="hidden text-xs text-quantum-300">パスキー方式が選択されています。暗号化時に端末のパスキー認証を行います。</p>
 
                 <!-- Password Strength Meter -->
                 <div id="strengthContainer" class="space-y-1.5 hidden">
@@ -285,12 +300,18 @@
                     </div>
                 </div>
 
-                <div class="pt-2">
+                <div class="pt-2 flex flex-wrap items-center gap-3">
+                    <button type="button" onclick="processDecryptionWithPasskey()"
+                            class="px-5 py-3 bg-quantum-900/50 hover:bg-quantum-900/70 border border-quantum-500/40 text-quantum-200 font-bold text-sm rounded-xl transition flex items-center justify-center space-x-2">
+                        <i data-lucide="fingerprint" class="w-4 h-4"></i>
+                        <span>パスキーで復号</span>
+                    </button>
                     <button onclick="processDecryption()" 
                             class="w-full sm:w-auto px-8 py-3 bg-quantum-500 hover:bg-quantum-600 text-white font-bold text-sm rounded-xl transition shadow-lg shadow-quantum-500/20 flex items-center justify-center space-x-2 cursor-pointer">
                         <i data-lucide="unlock" class="w-4 h-4"></i>
                         <span>復号化実行 (Decrypt)</span>
                     </button>
+                </div>
                 </div>
             </div>
 
@@ -369,61 +390,52 @@
         </div>
     </div>
 
-    <!-- PQC Engine: Self-contained Pure JavaScript ML-KEM-768 (Kyber-768) -->
+    <!-- PQC Engine: FIPS 203 ML-KEM-768 via pinned @noble/post-quantum implementation -->
     <script>
         const ML_KEM_768 = (() => {
-            async function hashSHA256(data) {
-                return new Uint8Array(await crypto.subtle.digest('SHA-256', data));
-            }
-            async function hashSHA512(data) {
-                return new Uint8Array(await crypto.subtle.digest('SHA-512', data));
-            }
-
-            function keypair() {
-                const seed = new Uint8Array(32);
-                crypto.getRandomValues(seed);
-                const pk = new Uint8Array(1184);
-                const sk = new Uint8Array(2400);
-                crypto.getRandomValues(pk);
-                crypto.getRandomValues(sk);
-                sk.set(seed, 0);
-                sk.set(pk, 768);
-                return { publicKey: pk, secretKey: sk };
-            }
-
-            async function encap(pk) {
-                const m = new Uint8Array(32);
-                crypto.getRandomValues(m);
-                
-                const pkHash = await hashSHA256(pk);
-                const sharedSecret = await hashSHA256(new Uint8Array([...m, ...pkHash.subarray(0, 16)]));
-
-                const ct = new Uint8Array(1088);
-                for (let i = 0; i < 32; i++) {
-                    ct[i] = m[i] ^ pkHash[i % pkHash.length];
+            let kemPromise;
+            async function getKem() {
+                if (!kemPromise) {
+                    kemPromise = import('https://esm.sh/@noble/post-quantum@0.7.0/ml-kem.js')
+                        .then(module => {
+                            if (!module.ml_kem768) throw new Error('ML-KEM-768ライブラリを読み込めませんでした。');
+                            return module.ml_kem768;
+                        })
+                        .catch(error => {
+                            kemPromise = null;
+                            throw new Error('FIPS 203 ML-KEM-768ライブラリの読み込みに失敗しました。インターネット接続を確認してください。 ' + error.message);
+                        });
                 }
-                const exp = await hashSHA512(new Uint8Array([...m, ...pk.subarray(0, 32)]));
-                for (let i = 32; i < 1088; i++) {
-                    ct[i] = exp[i % 64] ^ pk[i % pk.length];
-                }
-
-                return { ciphertext: ct, sharedSecret: sharedSecret };
+                return kemPromise;
             }
-
-            async function decap(ct, sk) {
+            async function keypair() {
+                const kem = await getKem();
+                return kem.keygen();
+            }
+            async function encap(publicKey) {
+                const kem = await getKem();
+                const result = kem.encapsulate(publicKey);
+                return { ciphertext: result.cipherText, sharedSecret: result.sharedSecret };
+            }
+            async function decap(ciphertext, secretKey) {
+                const kem = await getKem();
+                return kem.decapsulate(ciphertext, secretKey);
+            }
+            // Compatibility-only decoder for legacy PQENC1/PQENC2 files created by the old non-standard engine.
+            async function legacyDecap(ct, sk) {
+                if (!(ct instanceof Uint8Array) || ct.length !== 1088 || !(sk instanceof Uint8Array) || sk.length !== 2400) {
+                    throw new Error('旧形式のML-KEMデータ長が不正です。');
+                }
                 const pk = sk.subarray(768, 768 + 1184);
-                const pkHash = await hashSHA256(pk);
-                
+                const pkHash = new Uint8Array(await crypto.subtle.digest('SHA-256', pk));
                 const m = new Uint8Array(32);
-                for (let i = 0; i < 32; i++) {
-                    m[i] = ct[i] ^ pkHash[i % pkHash.length];
-                }
-
-                const sharedSecret = await hashSHA256(new Uint8Array([...m, ...pkHash.subarray(0, 16)]));
-                return sharedSecret;
+                for (let i = 0; i < 32; i++) m[i] = ct[i] ^ pkHash[i % pkHash.length];
+                const material = new Uint8Array(48);
+                material.set(m, 0);
+                material.set(pkHash.subarray(0, 16), 32);
+                return new Uint8Array(await crypto.subtle.digest('SHA-256', material));
             }
-
-            return { keypair, encap, decap };
+            return { keypair, encap, decap, legacyDecap };
         })();
     </script>
 
@@ -434,6 +446,20 @@
         let currentEncryptedBlob = null;
         let loadedEncryptedFile = null;
         let decryptedFiles = [];
+        let encryptAuthMode = 'password';
+        // Keep a newly-created credential available for retry if a later step is cancelled or fails.
+        let pendingPasskey = null;
+        try {
+            const savedPending = sessionStorage.getItem('quantumguard.pendingPasskey');
+            if (savedPending) {
+                const parsedPending = JSON.parse(savedPending);
+                const credentialId = base64UrlToBytes(parsedPending.credentialId);
+                const prfSalt = base64UrlToBytes(parsedPending.prfSalt);
+                if (credentialId.length >= 1 && credentialId.length <= 1024 && prfSalt.length === 32) {
+                    pendingPasskey = { credentialId, prfSalt };
+                } else sessionStorage.removeItem('quantumguard.pendingPasskey');
+            }
+        } catch (_) { pendingPasskey = null; }
 
         document.addEventListener('DOMContentLoaded', () => {
             lucide.createIcons();
@@ -680,6 +706,115 @@
             return card;
         }
 
+        // Passkey mode uses WebAuthn PRF to derive a local encryption key.
+        function setEncryptAuthMode(mode) {
+            encryptAuthMode = mode;
+            const input = document.getElementById('encryptPassword');
+            const status = document.getElementById('encryptPasskeyStatus');
+            const cancelButton = document.getElementById('cancelPasskeyModeButton');
+            if (mode === 'passkey') {
+                input.disabled = true;
+                input.placeholder = 'パスキー方式では使用しません';
+                status.classList.remove('hidden');
+                document.getElementById('strengthContainer').classList.add('hidden');
+                cancelButton.classList.remove('hidden');
+                cancelButton.classList.add('flex');
+                showToast('パスキー方式を選択しました。登録前ならパスワード方式に戻せます。', 'fingerprint');
+            } else {
+                input.disabled = false;
+                input.placeholder = '安全なパスワードを入力...';
+                status.classList.add('hidden');
+                cancelButton.classList.add('hidden');
+                cancelButton.classList.remove('flex');
+                updatePasswordStrength();
+                showToast('パスワード方式に戻しました。', 'key-round');
+            }
+            checkReadyToEncrypt();
+        }
+
+        function bufferToBase64Url(buffer) {
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            bytes.forEach(b => binary += String.fromCharCode(b));
+            return btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '');
+        }
+        function base64UrlToBytes(value) {
+            const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((value.length + 3) % 4);
+            return Uint8Array.from(atob(padded), c => c.charCodeAt(0));
+        }
+        function supportsPasskeyPRF() {
+            return !!(window.PublicKeyCredential && navigator.credentials &&
+                      window.isSecureContext && typeof PublicKeyCredential === 'function');
+        }
+        async function createPasskeyAndGetPRF(prfSalt) {
+            if (!supportsPasskeyPRF()) throw new Error('このブラウザーではパスキーを利用できません。HTTPSまたはlocalhost環境の対応ブラウザーで実行してください。');
+            const challenge = crypto.getRandomValues(new Uint8Array(32));
+            const userId = crypto.getRandomValues(new Uint8Array(16));
+            const credential = await navigator.credentials.create({
+                publicKey: {
+                    challenge,
+                    rp: { name: 'QuantumGuard' },
+                    user: { id: userId, name: 'quantumguard-user', displayName: 'QuantumGuard User' },
+                    pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+                    authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+                    timeout: 120000,
+                    attestation: 'none',
+                    extensions: { prf: {} }
+                }
+            });
+            if (!credential) throw new Error('パスキーの作成がキャンセルされました。登録は完了していません。');
+            // WebAuthn has no browser API to delete an authenticator credential. Retain it for retry.
+            pendingPasskey = { credentialId: new Uint8Array(credential.rawId), prfSalt: new Uint8Array(prfSalt) };
+            try {
+                sessionStorage.setItem('quantumguard.pendingPasskey', JSON.stringify({
+                    credentialId: bufferToBase64Url(pendingPasskey.credentialId),
+                    prfSalt: bufferToBase64Url(pendingPasskey.prfSalt)
+                }));
+            } catch (_) { /* In-memory retry remains available for this page session. */ }
+            const createExt = credential.getClientExtensionResults();
+            if (!createExt.prf || createExt.prf.enabled !== true) {
+                throw new Error('パスキー自体は登録されましたが、PRFに対応していません。パスワード方式に切り替えるか、PRF対応の認証器を使用してください。次回パスキーを選ぶ場合は同じ認証情報で再試行します。');
+            }
+            let prfOutput;
+            try {
+                prfOutput = await getPasskeyPRF(pendingPasskey.credentialId, pendingPasskey.prfSalt);
+            } catch (error) {
+                throw new Error('パスキーは登録済みですが、PRF認証が完了しませんでした。次回の暗号化では同じパスキーを使って再試行します。 ' + error.message);
+            }
+            return { credentialId: pendingPasskey.credentialId, prfOutput };
+        }
+        async function getOrCreatePasskeyAndGetPRF() {
+            if (pendingPasskey) {
+                const prfOutput = await getPasskeyPRF(pendingPasskey.credentialId, pendingPasskey.prfSalt);
+                return { credentialId: pendingPasskey.credentialId, prfSalt: pendingPasskey.prfSalt, prfOutput };
+            }
+            const prfSalt = crypto.getRandomValues(new Uint8Array(32));
+            const result = await createPasskeyAndGetPRF(prfSalt);
+            return { ...result, prfSalt };
+        }
+        async function getPasskeyPRF(credentialId, prfSalt) {
+            if (!supportsPasskeyPRF()) throw new Error('このブラウザーではパスキーを利用できません。');
+            const assertion = await navigator.credentials.get({
+                publicKey: {
+                    challenge: crypto.getRandomValues(new Uint8Array(32)),
+                    allowCredentials: [{ type: 'public-key', id: credentialId }],
+                    userVerification: 'required',
+                    timeout: 120000,
+                    extensions: { prf: { eval: { first: prfSalt } } }
+                }
+            });
+            const result = assertion && assertion.getClientExtensionResults().prf;
+            if (!result || !result.results || !result.results.first) throw new Error('パスキーのPRF結果を取得できません。作成時と同じパスキーを使用してください。');
+            return new Uint8Array(result.results.first);
+        }
+        async function derivePasskeyRoot(prfOutput, salt) {
+            const key = await crypto.subtle.importKey('raw', prfOutput, 'HKDF', false, ['deriveBits']);
+            return new Uint8Array(await crypto.subtle.deriveBits(
+                { name: 'HKDF', hash: 'SHA-256', salt, info: new TextEncoder().encode('QuantumGuard passkey file encryption v1') },
+                key, 256
+            ));
+        }
+
         // Password Generator & Controls
         function generateRandomPassword() {
             const length = 20;
@@ -777,7 +912,7 @@
                 clearBtn.classList.add('hidden');
             }
 
-            const isReady = selectedFilesEncrypt.length > 0 && pass.trim().length > 0;
+            const isReady = selectedFilesEncrypt.length > 0 && (encryptAuthMode === 'passkey' || pass.trim().length > 0);
             btn.disabled = !isReady;
 
             if (isReady) {
@@ -798,169 +933,350 @@
             }
         }
 
+        // ================= CHUNKED PQENC4 STREAMING FORMAT =================
+        // Each authenticated record uses a unique 96-bit nonce: 64-bit per-container
+        // random prefix + 32-bit monotonically increasing record counter.
+        const PQENC4_CHUNK_SIZE = 4 * 1024 * 1024;
+        const PQENC4_MAX_MANIFEST_SIZE = 4 * 1024 * 1024;
+
+        function concatBytes(parts) {
+            const total = parts.reduce((n, part) => n + part.length, 0);
+            const out = new Uint8Array(total);
+            let offset = 0;
+            for (const part of parts) { out.set(part, offset); offset += part.length; }
+            return out;
+        }
+
+        function pqenc4Nonce(prefix, counter) {
+            if (!(prefix instanceof Uint8Array) || prefix.length !== 8 || !Number.isSafeInteger(counter) || counter < 0 || counter > 0xffffffff) {
+                throw new Error('チャンクNonceの値が不正です。');
+            }
+            const nonce = new Uint8Array(12);
+            nonce.set(prefix, 0);
+            new DataView(nonce.buffer).setUint32(8, counter, false);
+            return nonce;
+        }
+
+        function pqenc4AAD(headerHash, counter, kind, fileIndex, chunkIndex, plainLength) {
+            const aad = new Uint8Array(49);
+            aad.set(headerHash, 0);
+            const view = new DataView(aad.buffer);
+            view.setUint32(32, counter, false);
+            aad[36] = kind;
+            view.setUint32(37, fileIndex >>> 0, false);
+            view.setUint32(41, chunkIndex >>> 0, false);
+            view.setUint32(45, plainLength >>> 0, false);
+            return aad;
+        }
+
+        function makePQENC4Header(context, noncePrefix, skIv, encSk) {
+            const magic = new TextEncoder().encode('PQENC4');
+            const chunkSize = new Uint8Array(4);
+            new DataView(chunkSize.buffer).setUint32(0, PQENC4_CHUNK_SIZE, true);
+            const mode = new Uint8Array([context.passkeyHeader ? 1 : 0]);
+            const parts = [magic, context.salt, context.pqcCiphertext, skIv, encSk, chunkSize, mode];
+            if (context.passkeyHeader) {
+                const id = context.passkeyHeader.credentialId;
+                const prfSalt = context.passkeyHeader.prfSalt;
+                if (!(id instanceof Uint8Array) || id.length < 1 || id.length > 1024 || !(prfSalt instanceof Uint8Array) || prfSalt.length !== 32) {
+                    throw new Error('パスキーのヘッダー情報が不正です。');
+                }
+                const idLen = new Uint8Array(2);
+                new DataView(idLen.buffer).setUint16(0, id.length, true);
+                parts.push(idLen, id, prfSalt);
+            }
+            parts.push(noncePrefix);
+            return concatBytes(parts);
+        }
+
+        async function createPQENC4Blob(files, context, usedNoncePrefixes, progressCallback) {
+            if (!Array.isArray(files) || files.length < 1 || files.length > 1000) throw new Error('暗号化対象のファイル数が不正です。');
+            const manifest = files.map(file => ({
+                name: file.name,
+                type: file.type || 'application/octet-stream',
+                size: file.size
+            }));
+            for (const meta of manifest) {
+                if (typeof meta.name !== 'string' || !meta.name || meta.name.length > 1024 ||
+                    typeof meta.type !== 'string' || meta.type.length > 255 ||
+                    !Number.isSafeInteger(meta.size) || meta.size < 0) throw new Error('ファイル情報が不正です。');
+            }
+            const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
+            if (manifestBytes.length > PQENC4_MAX_MANIFEST_SIZE) throw new Error('ファイル一覧が大きすぎます。');
+
+            // A separate wrapping IV and nonce prefix are generated for every output container.
+            const skIv = crypto.getRandomValues(new Uint8Array(12));
+            const encSk = new Uint8Array(await crypto.subtle.encrypt(
+                { name: 'AES-GCM', iv: skIv }, context.wrappingKey, context.secretKey
+            ));
+            let noncePrefix;
+            do { noncePrefix = crypto.getRandomValues(new Uint8Array(8)); }
+            while (usedNoncePrefixes.has(Array.from(noncePrefix).join(',')));
+            usedNoncePrefixes.add(Array.from(noncePrefix).join(','));
+
+            const header = makePQENC4Header(context, noncePrefix, skIv, encSk);
+            const headerHash = new Uint8Array(await crypto.subtle.digest('SHA-256', header));
+            const parts = [header];
+            let counter = 0;
+            const addRecord = async (plainBytes, kind, fileIndex, chunkIndex) => {
+                if (counter > 0xffffffff) throw new Error('暗号化チャンク数が上限を超えました。');
+                const nonce = pqenc4Nonce(noncePrefix, counter);
+                const aad = pqenc4AAD(headerHash, counter, kind, fileIndex, chunkIndex, plainBytes.length);
+                const cipher = new Uint8Array(await crypto.subtle.encrypt(
+                    { name: 'AES-GCM', iv: nonce, additionalData: aad, tagLength: 128 }, context.masterKey, plainBytes
+                ));
+                const prefix = new Uint8Array(4);
+                new DataView(prefix.buffer).setUint32(0, plainBytes.length, true);
+                parts.push(prefix, cipher);
+                counter++;
+            };
+
+            await addRecord(manifestBytes, 0, 0xffffffff, 0);
+            let totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+            let completedBytes = 0;
+            for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
+                const file = files[fileIndex];
+                let chunkIndex = 0;
+                for (let offset = 0; offset < file.size; offset += PQENC4_CHUNK_SIZE) {
+                    const end = Math.min(offset + PQENC4_CHUNK_SIZE, file.size);
+                    const plain = new Uint8Array(await file.slice(offset, end).arrayBuffer());
+                    if (plain.length !== end - offset) throw new Error(`ファイル「${file.name}」の読み込みが途中で終了しました。`);
+                    await addRecord(plain, 1, fileIndex, chunkIndex++);
+                    completedBytes += plain.length;
+                    if (progressCallback) progressCallback(totalBytes ? completedBytes / totalBytes : 1);
+                }
+            }
+            // Authenticated terminal record detects truncation and missing trailing chunks.
+            await addRecord(new Uint8Array(0), 2, 0xffffffff, 0);
+            return new Blob(parts, { type: 'application/octet-stream' });
+        }
+
+        async function readPQENC4Header(blob) {
+            const fixedLength = 3543;
+            if (!blob || blob.size < fixedLength + 4 + 16) throw new Error('PQENC4コンテナが短すぎます。');
+            const fixed = new Uint8Array(await blob.slice(0, fixedLength).arrayBuffer());
+            if (new TextDecoder().decode(fixed.subarray(0, 6)) !== 'PQENC4') throw new Error('PQENC4形式ではありません。');
+            const salt = fixed.slice(6, 22);
+            const pqcCiphertext = fixed.slice(22, 1110);
+            const skIv = fixed.slice(1110, 1122);
+            const encSk = fixed.slice(1122, 3538);
+            const chunkSize = new DataView(fixed.buffer, fixed.byteOffset + 3538, 4).getUint32(0, true);
+            const mode = fixed[3542];
+            if (salt.length !== 16 || pqcCiphertext.length !== 1088 || skIv.length !== 12 || encSk.length !== 2416 ||
+                chunkSize < 65536 || chunkSize > 8 * 1024 * 1024 || (chunkSize & (chunkSize - 1)) !== 0) {
+                throw new Error('PQENC4固定ヘッダーの値が不正です。');
+            }
+            let headerLength, authMode, credentialId = null, prfSalt = null, noncePrefix;
+            if (mode === 0) {
+                authMode = 'password';
+                headerLength = 3551;
+                if (blob.size < headerLength + 4 + 16) throw new Error('PQENC4ヘッダーが破損しています。');
+                noncePrefix = new Uint8Array(await blob.slice(3543, 3551).arrayBuffer());
+            } else if (mode === 1) {
+                authMode = 'passkey';
+                const idLenBytes = new Uint8Array(await blob.slice(3543, 3545).arrayBuffer());
+                if (idLenBytes.length !== 2) throw new Error('パスキーID長が不足しています。');
+                const idLength = new DataView(idLenBytes.buffer).getUint16(0, true);
+                if (idLength < 1 || idLength > 1024) throw new Error('パスキーID長が不正です。');
+                headerLength = 3545 + idLength + 32 + 8;
+                if (blob.size < headerLength + 4 + 16) throw new Error('PQENC4パスキーヘッダーが破損しています。');
+                const tail = new Uint8Array(await blob.slice(3545, headerLength).arrayBuffer());
+                credentialId = tail.slice(0, idLength);
+                prfSalt = tail.slice(idLength, idLength + 32);
+                noncePrefix = tail.slice(idLength + 32, idLength + 40);
+            } else throw new Error('PQENC4認証方式識別子が不正です。');
+            const headerBytes = new Uint8Array(await blob.slice(0, headerLength).arrayBuffer());
+            return { salt, pqcCiphertext, skIv, encSk, chunkSize, authMode, credentialId, prfSalt, noncePrefix, headerLength, headerHash: new Uint8Array(await crypto.subtle.digest('SHA-256', headerBytes)) };
+        }
+
+        async function derivePQENC4MasterKey(blob, requestedMode, password) {
+            const header = await readPQENC4Header(blob);
+            if (header.authMode !== requestedMode) {
+                throw new Error(header.authMode === 'passkey'
+                    ? 'このファイルはパスキー方式です。「パスキーで復号」を使用してください。'
+                    : 'このファイルはパスワード方式です。通常の復号ボタンを使用してください。');
+            }
+            let rootKey;
+            if (requestedMode === 'passkey') {
+                const prfOutput = await getPasskeyPRF(header.credentialId, header.prfSalt);
+                rootKey = await derivePasskeyRoot(prfOutput, header.salt);
+            } else {
+                if (!password) throw new Error('パスワードを入力してください。');
+                const passBytes = new TextEncoder().encode(password);
+                const baseKey = await crypto.subtle.importKey('raw', passBytes, 'PBKDF2', false, ['deriveBits']);
+                rootKey = new Uint8Array(await crypto.subtle.deriveBits(
+                    { name: 'PBKDF2', salt: header.salt, iterations: 100000, hash: 'SHA-256' }, baseKey, 256
+                ));
+            }
+            const wrappingKey = await crypto.subtle.importKey('raw', rootKey, 'AES-GCM', false, ['decrypt']);
+            let secretKey;
+            try {
+                secretKey = new Uint8Array(await crypto.subtle.decrypt(
+                    { name: 'AES-GCM', iv: header.skIv }, wrappingKey, header.encSk
+                ));
+            } catch (_) { throw new Error(requestedMode === 'passkey' ? 'パスキーが一致しないか、鍵データが破損しています。' : 'パスワードが正しくないか、鍵データが破損しています。'); }
+            if (secretKey.length !== 2400) throw new Error('ML-KEM-768秘密鍵の長さが不正です。');
+            const sharedSecret = await ML_KEM_768.decap(header.pqcCiphertext, secretKey);
+            if (!(sharedSecret instanceof Uint8Array) || sharedSecret.length !== 32) throw new Error('ML-KEM-768共有秘密鍵の長さが不正です。');
+            const material = new Uint8Array(64);
+            material.set(rootKey, 0);
+            material.set(sharedSecret, 32);
+            const masterKeyHash = await crypto.subtle.digest('SHA-256', material);
+            const masterKey = await crypto.subtle.importKey('raw', masterKeyHash, 'AES-GCM', false, ['decrypt']);
+            return { header, masterKey };
+        }
+
+        async function decryptPQENC4Blob(blob, header, masterKey) {
+            let offset = header.headerLength;
+            let counter = 0;
+            const readU32 = async () => {
+                if (offset + 4 > blob.size) throw new Error('チャンクヘッダーが途中で切れています。');
+                const b = new Uint8Array(await blob.slice(offset, offset + 4).arrayBuffer());
+                offset += 4;
+                return new DataView(b.buffer).getUint32(0, true);
+            };
+            const decryptRecord = async (plainLength, kind, fileIndex, chunkIndex) => {
+                if (counter > 0xffffffff) throw new Error('チャンク数が上限を超えています。');
+                const cipherLength = plainLength + 16;
+                if (!Number.isSafeInteger(cipherLength) || offset + cipherLength > blob.size) throw new Error('暗号化チャンクが途中で切れています。');
+                const cipher = new Uint8Array(await blob.slice(offset, offset + cipherLength).arrayBuffer());
+                offset += cipherLength;
+                const nonce = pqenc4Nonce(header.noncePrefix, counter);
+                const aad = pqenc4AAD(header.headerHash, counter, kind, fileIndex, chunkIndex, plainLength);
+                counter++;
+                try {
+                    return new Uint8Array(await crypto.subtle.decrypt(
+                        { name: 'AES-GCM', iv: nonce, additionalData: aad, tagLength: 128 }, masterKey, cipher
+                    ));
+                } catch (_) { throw new Error('チャンクの認証に失敗しました。データの改ざん・順序変更・破損の可能性があります。'); }
+            };
+
+            const manifestLength = await readU32();
+            if (manifestLength < 2 || manifestLength > PQENC4_MAX_MANIFEST_SIZE) throw new Error('暗号化マニフェストの長さが不正です。');
+            const manifestBytes = await decryptRecord(manifestLength, 0, 0xffffffff, 0);
+            let manifest;
+            try { manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(manifestBytes)); }
+            catch (_) { throw new Error('暗号化マニフェストがJSON形式ではありません。'); }
+            if (!Array.isArray(manifest) || manifest.length < 1 || manifest.length > 1000) throw new Error('ファイル一覧の形式または件数が不正です。');
+            let totalChunks = 0;
+            for (const meta of manifest) {
+                if (!meta || typeof meta !== 'object' || Array.isArray(meta) ||
+                    typeof meta.name !== 'string' || !meta.name || meta.name.length > 1024 ||
+                    typeof meta.type !== 'string' || meta.type.length > 255 ||
+                    !Number.isSafeInteger(meta.size) || meta.size < 0) throw new Error('ファイルメタデータが不正です。');
+                totalChunks += Math.ceil(meta.size / header.chunkSize);
+                if (!Number.isSafeInteger(totalChunks) || totalChunks > 0xfffffffd) throw new Error('チャンク数が上限を超えています。');
+            }
+            const fileParts = manifest.map(() => []);
+            let completedChunks = 0;
+            for (let fileIndex = 0; fileIndex < manifest.length; fileIndex++) {
+                const meta = manifest[fileIndex];
+                let remaining = meta.size;
+                let chunkIndex = 0;
+                while (remaining > 0) {
+                    const expectedLength = Math.min(header.chunkSize, remaining);
+                    const plainLength = await readU32();
+                    if (plainLength !== expectedLength) throw new Error('チャンクのサイズまたは順序が不正です。');
+                    const plain = await decryptRecord(plainLength, 1, fileIndex, chunkIndex++);
+                    if (plain.length !== expectedLength) throw new Error('復号チャンクのサイズが一致しません。');
+                    fileParts[fileIndex].push(plain);
+                    remaining -= plain.length;
+                    completedChunks++;
+                    if (totalChunks) updateProgress(`チャンクを検証・復号中... (${completedChunks}/${totalChunks})`, 80 + Math.floor(completedChunks / totalChunks * 15));
+                }
+            }
+            const endLength = await readU32();
+            if (endLength !== 0) throw new Error('終端レコードが不正です。');
+            const endPlain = await decryptRecord(0, 2, 0xffffffff, 0);
+            if (endPlain.length !== 0 || offset !== blob.size) throw new Error('終端認証またはコンテナ長の検証に失敗しました。');
+            return manifest.map((meta, index) => {
+                const blobOut = new Blob(fileParts[index], { type: meta.type || 'application/octet-stream' });
+                return { file: { name: meta.name, size: meta.size, type: meta.type || 'application/octet-stream' }, blob: blobOut, previewUrl: URL.createObjectURL(blobOut) };
+            });
+        }
+
+        async function isPQENC4Blob(blob) {
+            if (!blob || blob.size < 6) return false;
+            const magic = new TextDecoder().decode(new Uint8Array(await blob.slice(0, 6).arrayBuffer()));
+            return magic === 'PQENC4';
+        }
+
+
         // ================= ENCRYPTION EXECUTION =================
 
         async function processEncryption() {
             const password = document.getElementById('encryptPassword').value;
-            if (!password || selectedFilesEncrypt.length === 0) {
-                showToast("ファイルとパスワードを設定してください。", "key");
+            if ((encryptAuthMode === 'password' && !password) || selectedFilesEncrypt.length === 0) {
+                showToast("ファイルと認証方式を設定してください。", "key");
                 return;
             }
 
-            showProgressModal("暗号化を開始します", "PBKDF2 鍵導出 & ML-KEM-768 カプセル化処理中...", 10);
-
+            showProgressModal("暗号化を開始します", "鍵導出 & ML-KEM-768 カプセル化処理中...", 10);
             try {
-                await sleep(100);
-
+                await sleep(50);
                 const salt = crypto.getRandomValues(new Uint8Array(16));
-
-                // 1. PBKDF2 鍵導出 (パスワードベース)
-                const passBytes = new TextEncoder().encode(password);
-                const baseKey = await crypto.subtle.importKey(
-                    "raw", passBytes, "PBKDF2", false, ["deriveBits"]
-                );
-                const derivedBits = await crypto.subtle.deriveBits(
-                    { name: "PBKDF2", salt: salt, iterations: 100000, hash: "SHA-256" },
-                    baseKey, 256
-                );
-                const pbkdf2RawKey = new Uint8Array(derivedBits);
-
-                // パスワード由来のAES鍵（PQC秘密鍵の保護用）
-                const pbkdf2AesKey = await crypto.subtle.importKey(
-                    "raw", pbkdf2RawKey, "AES-GCM", false, ["encrypt", "decrypt"]
-                );
-
-                updateProgress("ML-KEM-768 (Kyber) 量子耐性キーペア生成中...", 30);
-                await sleep(100);
-
-                // 2. ML-KEM-768 PQC キーペア生成 & カプセル化
-                const pqcPair = ML_KEM_768.keypair();
-                const pqcEncap = await ML_KEM_768.encap(pqcPair.publicKey);
-
-                // PQC秘密鍵をパスワード鍵で暗号化してコンテナに保存可能にする
-                const skIv = crypto.getRandomValues(new Uint8Array(12));
-                const encSkBuffer = await crypto.subtle.encrypt(
-                    { name: "AES-GCM", iv: skIv },
-                    pbkdf2AesKey,
-                    pqcPair.secretKey
-                );
-                const encSk = new Uint8Array(encSkBuffer);
-
-                // 3. ハイブリッド・マスターキー合成 (PBKDF2 + PQC Shared Secret)
-                const combinedKeyMaterial = new Uint8Array(64);
-                combinedKeyMaterial.set(pbkdf2RawKey, 0);
-                combinedKeyMaterial.set(pqcEncap.sharedSecret, 32);
-
-                const masterKeyHash = await crypto.subtle.digest("SHA-256", combinedKeyMaterial);
-                const masterKey = await crypto.subtle.importKey(
-                    "raw", masterKeyHash, "AES-GCM", false, ["encrypt", "decrypt"]
-                );
-
-                updateProgress("ファイルデータ構造の構築中...", 60);
-                await sleep(100);
-
-                const fileBuffers = [];
-                const metaList = [];
-                for (const item of selectedFilesEncrypt) {
-                    const arrayBuffer = await item.file.arrayBuffer();
-                    const u8 = new Uint8Array(arrayBuffer);
-                    fileBuffers.push(u8);
-                    metaList.push({
-                        name: item.file.name,
-                        type: item.file.type || 'application/octet-stream',
-                        size: u8.length
-                    });
+                let rootKey, passkeyHeader = null;
+                if (encryptAuthMode === 'passkey') {
+                    updateProgress("パスキー認証（WebAuthn PRF）を待機中...", 20);
+                    const passkey = await getOrCreatePasskeyAndGetPRF();
+                    rootKey = await derivePasskeyRoot(passkey.prfOutput, salt);
+                    passkeyHeader = { credentialId: passkey.credentialId, prfSalt: passkey.prfSalt };
+                } else {
+                    const passBytes = new TextEncoder().encode(password);
+                    const baseKey = await crypto.subtle.importKey('raw', passBytes, 'PBKDF2', false, ['deriveBits']);
+                    rootKey = new Uint8Array(await crypto.subtle.deriveBits(
+                        { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, baseKey, 256
+                    ));
                 }
+                const wrappingKey = await crypto.subtle.importKey('raw', rootKey, 'AES-GCM', false, ['encrypt', 'decrypt']);
+                updateProgress('FIPS 203 ML-KEM-768 鍵生成・カプセル化中...', 30);
+                const pqcPair = await ML_KEM_768.keypair();
+                const pqcEncap = await ML_KEM_768.encap(pqcPair.publicKey);
+                if (pqcPair.secretKey.length !== 2400 || pqcEncap.ciphertext.length !== 1088 || pqcEncap.sharedSecret.length !== 32) {
+                    throw new Error('ML-KEM-768の出力サイズが規格と一致しません。');
+                }
+                const material = new Uint8Array(64);
+                material.set(rootKey, 0);
+                material.set(pqcEncap.sharedSecret, 32);
+                const masterKeyHash = await crypto.subtle.digest('SHA-256', material);
+                const masterKey = await crypto.subtle.importKey('raw', masterKeyHash, 'AES-GCM', false, ['encrypt', 'decrypt']);
+                const context = { salt, pqcCiphertext: pqcEncap.ciphertext, secretKey: pqcPair.secretKey, wrappingKey, masterKey, passkeyHeader };
+                const usedNoncePrefixes = new Set();
 
-                const jsonMetaString = JSON.stringify(metaList);
-                const jsonMetaBytes = new TextEncoder().encode(jsonMetaString);
-
-                let totalPayloadSize = 4 + jsonMetaBytes.length;
-                fileBuffers.forEach(buf => totalPayloadSize += buf.length);
-
-                const payloadBuffer = new Uint8Array(totalPayloadSize);
-                const view = new DataView(payloadBuffer.buffer);
-                view.setUint32(0, jsonMetaBytes.length, true);
-                payloadBuffer.set(jsonMetaBytes, 4);
-
-                let offset = 4 + jsonMetaBytes.length;
-                fileBuffers.forEach(buf => {
-                    payloadBuffer.set(buf, offset);
-                    offset += buf.length;
-                });
-
-                updateProgress("AES-256-GCM 暗号化処理中...", 85);
-                await sleep(100);
-
-                const payloadIv = crypto.getRandomValues(new Uint8Array(12));
-                const encPayloadBuffer = await crypto.subtle.encrypt(
-                    { name: "AES-GCM", iv: payloadIv },
-                    masterKey,
-                    payloadBuffer
-                );
-
-                updateProgress(".pqenc 暗号化ファイルの作成...", 95);
-
-                // 個別暗号化ファイルの生成
+                const totalBytes = selectedFilesEncrypt.reduce((sum, item) => sum + item.file.size, 0);
+                updateProgress('ファイルをチャンク単位で暗号化中...', 45);
+                // Keep the existing per-file download option, but each output gets independent IVs/nonces.
                 for (let i = 0; i < selectedFilesEncrypt.length; i++) {
                     const item = selectedFilesEncrypt[i];
-                    const buf = fileBuffers[i];
-                    const singleMeta = [{
-                        name: item.file.name,
-                        type: item.file.type || 'application/octet-stream',
-                        size: buf.length
-                    }];
-                    const jsonSingleBytes = new TextEncoder().encode(JSON.stringify(singleMeta));
-                    const singlePayload = new Uint8Array(4 + jsonSingleBytes.length + buf.length);
-                    const viewSingle = new DataView(singlePayload.buffer);
-                    viewSingle.setUint32(0, jsonSingleBytes.length, true);
-                    singlePayload.set(jsonSingleBytes, 4);
-                    singlePayload.set(buf, 4 + jsonSingleBytes.length);
-
-                    const singleEncPayload = await crypto.subtle.encrypt(
-                        { name: "AES-GCM", iv: payloadIv },
-                        masterKey,
-                        singlePayload
-                    );
-
-                    item.encryptedBlob = buildBinaryContainer({
-                        salt: salt,
-                        pqcCiphertext: pqcEncap.ciphertext,
-                        skIv: skIv,
-                        encSk: encSk,
-                        payloadIv: payloadIv,
-                        encryptedPayload: new Uint8Array(singleEncPayload)
+                    item.encryptedBlob = await createPQENC4Blob([item.file], context, usedNoncePrefixes, ratio => {
+                        const base = totalBytes ? ratio * item.file.size : 0;
+                        updateProgress(`個別ファイルを暗号化中... ${i + 1}/${selectedFilesEncrypt.length}`, 45 + Math.floor((i / selectedFilesEncrypt.length) * 20 + base / Math.max(totalBytes, 1) * 20));
                     });
                     item.encrypted = true;
                 }
 
-                // 一括暗号化パッケージの生成
-                const containerBlob = buildBinaryContainer({
-                    salt: salt,
-                    pqcCiphertext: pqcEncap.ciphertext,
-                    skIv: skIv,
-                    encSk: encSk,
-                    payloadIv: payloadIv,
-                    encryptedPayload: new Uint8Array(encPayloadBuffer)
+                updateProgress('一括パッケージをチャンク単位で暗号化中...', 70);
+                const allFiles = selectedFilesEncrypt.map(item => item.file);
+                currentEncryptedBlob = await createPQENC4Blob(allFiles, context, usedNoncePrefixes, ratio => {
+                    updateProgress(`一括暗号化中... ${Math.floor(ratio * 100)}%`, 70 + Math.floor(ratio * 23));
                 });
 
-                currentEncryptedBlob = containerBlob;
+                if (encryptAuthMode === 'passkey') {
+                    pendingPasskey = null;
+                    try { sessionStorage.removeItem('quantumguard.pendingPasskey'); } catch (_) {}
+                }
                 renderEncryptGallery();
-
-                await sleep(300);
+                await sleep(150);
                 hideProgressModal();
-
                 document.getElementById('downloadContainerBox').classList.remove('hidden');
                 document.getElementById('downloadEncryptedFileBtn').onclick = () => {
                     downloadBlob(currentEncryptedBlob, `quantum_encrypted_pack_${Date.now()}.pqenc`);
                 };
-
-                showToast("暗号化完了！ファイル一覧が暗号化表示に切り原わりました。", "shield-check");
-
+                showToast('チャンク認証付き暗号化が完了しました。', 'shield-check');
             } catch (err) {
-                console.error("Encryption Error:", err);
+                console.error('Encryption Error:', err);
                 hideProgressModal();
-                showToast("暗号化失敗: " + err.message, "shield-alert");
+                showToast('暗号化失敗: ' + (err.message || '不明なエラー'), 'shield-alert');
             }
         }
 
@@ -979,103 +1295,91 @@
 
         async function processDecryption() {
             const password = document.getElementById('decryptPassword').value;
-            if (!password || !loadedEncryptedFile) {
-                showToast("パスワードを入力してください。", "key");
-                return;
-            }
-
-            showProgressModal("復号化を開始します", "暗号化コンテナヘッダー検証中...", 15);
-
+            if (!loadedEncryptedFile) { showToast('暗号化ファイルを選択してください。', 'key'); return; }
+            showProgressModal('復号化を開始します', '暗号化コンテナを検証中...', 10);
             try {
-                await sleep(200);
+                if (await isPQENC4Blob(loadedEncryptedFile)) {
+                    updateProgress('鍵を復元中...', 25);
+                    const recovered = await derivePQENC4MasterKey(loadedEncryptedFile, 'password', password);
+                    updateProgress('チャンクを認証・復号中...', 40);
+                    decryptedFiles = await decryptPQENC4Blob(loadedEncryptedFile, recovered.header, recovered.masterKey);
+                    hideProgressModal();
+                    renderDecryptGallery();
+                    showToast(`${decryptedFiles.length} 個のファイルをストリーミング復号しました。`, 'unlock');
+                    return;
+                }
+
+                await sleep(100);
                 const arrayBuffer = await loadedEncryptedFile.arrayBuffer();
                 const container = parseBinaryContainer(new Uint8Array(arrayBuffer));
-
-                updateProgress("PBKDF2 パスワードキー復元中...", 35);
+                if (container.authMode === 'passkey') throw new Error('このファイルはパスキー方式で暗号化されています。「パスキーで復号」を使用してください。');
+                if (!password) throw new Error('パスワードを入力してください。');
+                updateProgress('PBKDF2 パスワードキー復元中...', 35);
                 const passBytes = new TextEncoder().encode(password);
-                const baseKey = await crypto.subtle.importKey(
-                    "raw", passBytes, "PBKDF2", false, ["deriveBits"]
-                );
-                const derivedBits = await crypto.subtle.deriveBits(
-                    { name: "PBKDF2", salt: container.salt, iterations: 100000, hash: "SHA-256" },
-                    baseKey, 256
-                );
+                const baseKey = await crypto.subtle.importKey('raw', passBytes, 'PBKDF2', false, ['deriveBits']);
+                const derivedBits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: container.salt, iterations: 100000, hash: 'SHA-256' }, baseKey, 256);
                 const pbkdf2RawKey = new Uint8Array(derivedBits);
-
-                // 1. パスワードからPQC秘密鍵を復元
-                const pbkdf2AesKey = await crypto.subtle.importKey(
-                    "raw", pbkdf2RawKey, "AES-GCM", false, ["encrypt", "decrypt"]
-                );
-
+                const pbkdf2AesKey = await crypto.subtle.importKey('raw', pbkdf2RawKey, 'AES-GCM', false, ['decrypt']);
                 let recoveredSecretKey;
                 try {
-                    const decSkBuffer = await crypto.subtle.decrypt(
-                        { name: "AES-GCM", iv: container.skIv },
-                        pbkdf2AesKey,
-                        container.encSk
-                    );
-                    recoveredSecretKey = new Uint8Array(decSkBuffer);
-                } catch (e) {
-                    throw new Error("パスワードが正しくないか、暗号化データが破損しています。");
-                }
-
-                updateProgress("ML-KEM-768 (Kyber) 共有鍵の計算中...", 55);
-                // 2. 復元したPQC秘密鍵で decap を実行
-                const pqcSharedSecret = await ML_KEM_768.decap(container.pqcCiphertext, recoveredSecretKey);
-
-                // 3. ハイブリッド・マスターキー合成
+                    recoveredSecretKey = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: container.skIv }, pbkdf2AesKey, container.encSk));
+                } catch (_) { throw new Error('パスワードが正しくないか、暗号化データが破損しています。'); }
+                updateProgress('ML-KEM-768 共有鍵の計算中...', 55);
+                const pqcSharedSecret = container.cryptoVersion < 3
+                    ? await ML_KEM_768.legacyDecap(container.pqcCiphertext, recoveredSecretKey)
+                    : await ML_KEM_768.decap(container.pqcCiphertext, recoveredSecretKey);
                 const combinedKeyMaterial = new Uint8Array(64);
-                combinedKeyMaterial.set(pbkdf2RawKey, 0);
-                combinedKeyMaterial.set(pqcSharedSecret, 32);
-
-                const masterKeyHash = await crypto.subtle.digest("SHA-256", combinedKeyMaterial);
-                const masterKey = await crypto.subtle.importKey(
-                    "raw", masterKeyHash, "AES-GCM", false, ["encrypt", "decrypt"]
-                );
-
-                updateProgress("AES-256-GCM ペイロードの解凍中...", 80);
-                const decryptedPayloadBuffer = await crypto.subtle.decrypt(
-                    { name: "AES-GCM", iv: container.payloadIv },
-                    masterKey,
-                    container.encryptedPayload
-                );
-
-                const u8 = new Uint8Array(decryptedPayloadBuffer);
-                const view = new DataView(u8.buffer);
-                const metaLen = view.getUint32(0, true);
-
-                const jsonMetaBytes = u8.subarray(4, 4 + metaLen);
-                const jsonMetaString = new TextDecoder().decode(jsonMetaBytes);
-                const metaList = JSON.parse(jsonMetaString);
-
-                let offset = 4 + metaLen;
-                decryptedFiles = [];
-
-                for (const meta of metaList) {
-                    const fileData = u8.subarray(offset, offset + meta.size);
-                    const blob = new Blob([fileData], { type: meta.type });
-                    const previewUrl = URL.createObjectURL(blob);
-                    
-                    decryptedFiles.push({
-                        file: { name: meta.name, size: meta.size, type: meta.type },
-                        blob: blob,
-                        previewUrl: previewUrl
-                    });
-
-                    offset += meta.size;
-                }
-
-                updateProgress("復号化完了！表示を生成中...", 98);
-                await sleep(200);
-                hideProgressModal();
-
-                renderDecryptGallery();
-                showToast(`${decryptedFiles.length} 個のファイルを正常に復号しました！`, "unlock");
-
+                combinedKeyMaterial.set(pbkdf2RawKey, 0); combinedKeyMaterial.set(pqcSharedSecret, 32);
+                const masterKeyHash = await crypto.subtle.digest('SHA-256', combinedKeyMaterial);
+                const masterKey = await crypto.subtle.importKey('raw', masterKeyHash, 'AES-GCM', false, ['decrypt']);
+                updateProgress('旧形式のペイロードを復号中...', 80);
+                const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: container.payloadIv }, masterKey, container.encryptedPayload);
+                decryptedFiles = parseAndValidatePayload(new Uint8Array(plain));
+                hideProgressModal(); renderDecryptGallery();
+                showToast(`${decryptedFiles.length} 個のファイルを正常に復号しました！`, 'unlock');
             } catch (err) {
-                console.error("Decryption Error:", err);
-                hideProgressModal();
-                showToast(err.message || "復号に失敗しました。パスワードを確認してください。", "shield-alert");
+                console.error('Decryption Error:', err); hideProgressModal();
+                showToast(err.message || '復号に失敗しました。パスワードを確認してください。', 'shield-alert');
+            }
+        }
+
+        async function processDecryptionWithPasskey() {
+            if (!loadedEncryptedFile) { showToast('暗号化ファイルを選択してください。', 'key'); return; }
+            showProgressModal('パスキー復号を開始します', '暗号化コンテナを検証中...', 10);
+            try {
+                if (await isPQENC4Blob(loadedEncryptedFile)) {
+                    updateProgress('パスキー認証と鍵復元中...', 25);
+                    const recovered = await derivePQENC4MasterKey(loadedEncryptedFile, 'passkey', '');
+                    updateProgress('チャンクを認証・復号中...', 40);
+                    decryptedFiles = await decryptPQENC4Blob(loadedEncryptedFile, recovered.header, recovered.masterKey);
+                    hideProgressModal(); renderDecryptGallery();
+                    showToast(`${decryptedFiles.length} 個のファイルをパスキーでストリーミング復号しました。`, 'unlock');
+                    return;
+                }
+                const bytes = new Uint8Array(await loadedEncryptedFile.arrayBuffer());
+                const container = parseBinaryContainer(bytes);
+                if (container.authMode !== 'passkey') throw new Error('このファイルはパスキー方式ではありません。通常の復号ボタンを使用してください。');
+                updateProgress('パスキー認証（WebAuthn PRF）を待機中...', 35);
+                const prfOutput = await getPasskeyPRF(container.credentialId, container.prfSalt);
+                const rootKey = await derivePasskeyRoot(prfOutput, container.salt);
+                const aesKey = await crypto.subtle.importKey('raw', rootKey, 'AES-GCM', false, ['decrypt']);
+                let recoveredSecretKey;
+                try { recoveredSecretKey = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: container.skIv }, aesKey, container.encSk)); }
+                catch (_) { throw new Error('パスキーが一致しないか、暗号化データが破損しています。'); }
+                updateProgress('ML-KEM-768 共有鍵の計算中...', 60);
+                const pqcSharedSecret = container.cryptoVersion < 3
+                    ? await ML_KEM_768.legacyDecap(container.pqcCiphertext, recoveredSecretKey)
+                    : await ML_KEM_768.decap(container.pqcCiphertext, recoveredSecretKey);
+                const material = new Uint8Array(64); material.set(rootKey, 0); material.set(pqcSharedSecret, 32);
+                const hash = await crypto.subtle.digest('SHA-256', material);
+                const masterKey = await crypto.subtle.importKey('raw', hash, 'AES-GCM', false, ['decrypt']);
+                const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: container.payloadIv }, masterKey, container.encryptedPayload);
+                decryptedFiles = parseAndValidatePayload(new Uint8Array(plain));
+                hideProgressModal(); renderDecryptGallery();
+                showToast(`${decryptedFiles.length} 個のファイルをパスキーで復号しました！`, 'unlock');
+            } catch (err) {
+                console.error('Passkey decryption error:', err); hideProgressModal();
+                showToast(err.message || 'パスキー復号に失敗しました。', 'shield-alert');
             }
         }
 
@@ -1102,34 +1406,92 @@
         // ================= BINARY CONTAINER BUILDER & PARSER =================
 
         function buildBinaryContainer(data) {
-            const magic = new TextEncoder().encode("PQENC1");
-            const parts = [
-                magic,
-                data.salt,
-                data.pqcCiphertext,
-                data.skIv,
-                data.encSk,
-                data.payloadIv,
-                data.encryptedPayload
-            ];
-
+            // PQENC3 identifies files using the real FIPS 203 ML-KEM-768 implementation.
+            const magic = new TextEncoder().encode('PQENC3');
+            const parts = [magic, data.salt, data.pqcCiphertext, data.skIv, data.encSk, data.payloadIv];
+            if (data.passkeyHeader) {
+                const id = data.passkeyHeader.credentialId;
+                if (!(id instanceof Uint8Array) || id.length < 1 || id.length > 1024) throw new Error('パスキーIDの長さが不正です。');
+                const len = new Uint8Array(2);
+                new DataView(len.buffer).setUint16(0, id.length, true);
+                parts.push(new Uint8Array([1]), len, id, data.passkeyHeader.prfSalt);
+            } else {
+                parts.push(new Uint8Array([0]));
+            }
+            parts.push(data.encryptedPayload);
             return new Blob(parts, { type: 'application/octet-stream' });
         }
 
         function parseBinaryContainer(buffer) {
+            if (!(buffer instanceof Uint8Array) || buffer.length < 3566) throw new Error('暗号化コンテナが短すぎるか、破損しています。');
             const magic = new TextDecoder().decode(buffer.subarray(0, 6));
-            if (magic !== "PQENC1") {
-                throw new Error("サポートされていないまたは破損した暗号化ファイル形式です。");
-            }
-
+            if (!['PQENC1', 'PQENC2', 'PQENC3'].includes(magic)) throw new Error('サポートされていないまたは破損した暗号化ファイル形式です。');
             const salt = buffer.subarray(6, 22);
             const pqcCiphertext = buffer.subarray(22, 1110);
             const skIv = buffer.subarray(1110, 1122);
             const encSk = buffer.subarray(1122, 3538);
             const payloadIv = buffer.subarray(3538, 3550);
-            const encryptedPayload = buffer.subarray(3550);
+            if (salt.length !== 16 || pqcCiphertext.length !== 1088 || skIv.length !== 12 || encSk.length !== 2416 || payloadIv.length !== 12) {
+                throw new Error('暗号化コンテナの固定ヘッダーが破損しています。');
+            }
+            if (magic === 'PQENC1') {
+                if (buffer.length < 3566) throw new Error('暗号化ペイロードが不足しています。');
+                return { salt, pqcCiphertext, skIv, encSk, payloadIv, encryptedPayload: buffer.subarray(3550), authMode: 'password', cryptoVersion: 1 };
+            }
+            if (magic === 'PQENC2') {
+                if (buffer.length < 3586) throw new Error('旧パスキー暗号化ヘッダーが破損しています。');
+                const authMode = buffer[3550] === 1 ? 'passkey' : 'unknown';
+                const idLength = new DataView(buffer.buffer, buffer.byteOffset + 3551, 2).getUint16(0, true);
+                const idStart = 3553, prfSaltStart = idStart + idLength, payloadStart = prfSaltStart + 32;
+                if (authMode !== 'passkey' || idLength < 1 || idLength > 1024 || payloadStart + 16 > buffer.length) throw new Error('旧パスキー暗号化ヘッダーが破損しています。');
+                return { salt, pqcCiphertext, skIv, encSk, payloadIv, authMode, credentialId: buffer.slice(idStart, prfSaltStart), prfSalt: buffer.slice(prfSaltStart, payloadStart), encryptedPayload: buffer.subarray(payloadStart), cryptoVersion: 2 };
+            }
+            if (buffer.length < 3567) throw new Error('PQENC3の認証方式ヘッダーが破損しています。');
+            const mode = buffer[3550];
+            if (mode === 0) {
+                if (buffer.length < 3567) throw new Error('暗号化ペイロードが不足しています。');
+                return { salt, pqcCiphertext, skIv, encSk, payloadIv, authMode: 'password', encryptedPayload: buffer.subarray(3551), cryptoVersion: 3 };
+            }
+            if (mode === 1) {
+                if (buffer.length < 3587) throw new Error('パスキー暗号化ヘッダーが破損しています。');
+                const idLength = new DataView(buffer.buffer, buffer.byteOffset + 3551, 2).getUint16(0, true);
+                const idStart = 3553, prfSaltStart = idStart + idLength, payloadStart = prfSaltStart + 32;
+                if (idLength < 1 || idLength > 1024 || payloadStart + 16 > buffer.length) throw new Error('パスキー暗号化ヘッダーが破損しています。');
+                return { salt, pqcCiphertext, skIv, encSk, payloadIv, authMode: 'passkey', credentialId: buffer.slice(idStart, prfSaltStart), prfSalt: buffer.slice(prfSaltStart, payloadStart), encryptedPayload: buffer.subarray(payloadStart), cryptoVersion: 3 };
+            }
+            throw new Error('認証方式識別子が不正です。');
+        }
 
-            return { salt, pqcCiphertext, skIv, encSk, payloadIv, encryptedPayload };
+        function parseAndValidatePayload(bytes) {
+            if (!(bytes instanceof Uint8Array) || bytes.length < 4) throw new Error('復号データが短すぎます。');
+            const metaLen = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true);
+            if (metaLen < 2 || metaLen > bytes.length - 4) throw new Error('ファイルメタデータの長さが不正です。');
+            let metaList;
+            try {
+                metaList = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(4, 4 + metaLen)));
+            } catch (_) {
+                throw new Error('ファイルメタデータがJSON形式ではないか、文字コードが破損しています。');
+            }
+            if (!Array.isArray(metaList) || metaList.length < 1 || metaList.length > 1000) throw new Error('ファイル一覧の形式または件数が不正です。');
+            let offset = 4 + metaLen;
+            const validated = [];
+            for (const meta of metaList) {
+                if (!meta || typeof meta !== 'object' || Array.isArray(meta) ||
+                    typeof meta.name !== 'string' || meta.name.length < 1 || meta.name.length > 1024 ||
+                    typeof meta.type !== 'string' || meta.type.length > 255 ||
+                    !Number.isSafeInteger(meta.size) || meta.size < 0 || meta.size > bytes.length ||
+                    offset + meta.size > bytes.length) {
+                    throw new Error('ファイル情報またはファイルサイズが不正です。');
+                }
+                validated.push({ meta, start: offset, end: offset + meta.size });
+                offset += meta.size;
+            }
+            if (offset !== bytes.length) throw new Error('ファイルデータの末尾に不明なデータが存在します。');
+            return validated.map(({ meta, start, end }) => {
+                const type = meta.type || 'application/octet-stream';
+                const blob = new Blob([bytes.subarray(start, end)], { type });
+                return { file: { name: meta.name, size: meta.size, type }, blob, previewUrl: URL.createObjectURL(blob) };
+            });
         }
 
         // ================= UI HELPERS =================
