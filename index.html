@@ -170,7 +170,7 @@
                     </div>
 
                     <div class="flex items-center space-x-3">
-                        <button type="button" id="passkeyModeButton" onclick="toggleEncryptAuthMode()"
+                        <button type="button" onclick="setEncryptAuthMode('passkey')"
                                 class="px-4 py-3 bg-quantum-900/40 hover:bg-quantum-900/60 border border-quantum-500/40 rounded-xl text-xs font-semibold text-quantum-300 flex items-center space-x-2 transition">
                             <i data-lucide="fingerprint" class="w-4 h-4"></i>
                             <span>パスキーを使用</span>
@@ -440,6 +440,7 @@
         let selectedFilesEncrypt = [];
         let currentEncryptedBlob = null;
         let loadedEncryptedFile = null;
+        let loadedEncryptedInfoPromise = null;
         let decryptedFiles = [];
         let encryptAuthMode = 'password';
         // Keep a newly-created credential available for retry if a later step is cancelled or fails.
@@ -702,49 +703,30 @@
         }
 
         // Passkey mode uses WebAuthn PRF to derive a local encryption key.
-        // The password field always remains available. The same button toggles modes.
-        function setEncryptAuthMode(mode, notify = true) {
+        function setEncryptAuthMode(mode) {
             encryptAuthMode = mode;
-            const input = document.getElementById('encryptPassword');
             const status = document.getElementById('encryptPasskeyStatus');
-            const modeButton = document.getElementById('passkeyModeButton');
+            const strength = document.getElementById('strengthContainer');
 
-            input.disabled = false;
-            input.placeholder = '安全なパスワードを入力...';
-
+            // Selecting passkey never locks the password field. If WebAuthn/PRF
+            // registration fails, password mode remains immediately available.
             if (mode === 'passkey') {
                 status.classList.remove('hidden');
-                modeButton.classList.add('bg-quantum-500/20', 'border-quantum-400/70');
-                modeButton.querySelector('span').textContent = 'パスキー選択中（解除）';
-                if (notify) showToast('パスキー方式を選択しました。もう一度ボタンを押すか、パスワードを入力するとパスワード方式に戻ります。', 'fingerprint');
+                if (document.getElementById('encryptPassword').value) strength.classList.remove('hidden');
+                showToast('パスキー方式を選択しました。登録が完了するまではパスワードも入力できます。', 'fingerprint');
             } else {
                 status.classList.add('hidden');
-                modeButton.classList.remove('bg-quantum-500/20', 'border-quantum-400/70');
-                modeButton.querySelector('span').textContent = 'パスキーを使用';
-                if (notify) showToast('パスワード方式を選択しました。', 'key-round');
-            }
-            updatePasswordStrength();
-            checkReadyToEncrypt();
-        }
-
-        function toggleEncryptAuthMode() {
-            setEncryptAuthMode(encryptAuthMode === 'passkey' ? 'password' : 'passkey');
-        }
-
-        function handleEncryptPasswordInput() {
-            // Typing a password is an explicit choice to use password authentication.
-            if (encryptAuthMode === 'passkey' && document.getElementById('encryptPassword').value.length > 0) {
-                setEncryptAuthMode('password', false);
-            } else {
                 updatePasswordStrength();
+                showToast('パスワード方式を選択しました。', 'key-round');
             }
+            checkReadyToEncrypt();
         }
 
         function bufferToBase64Url(buffer) {
             const bytes = new Uint8Array(buffer);
             let binary = '';
             bytes.forEach(b => binary += String.fromCharCode(b));
-            return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+            return btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '');
         }
         function base64UrlToBytes(value) {
             const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((value.length + 3) % 4);
@@ -783,13 +765,16 @@
             if (!createExt.prf || createExt.prf.enabled !== true) {
                 throw new Error('パスキー自体は登録されましたが、PRFに対応していません。パスワード方式に切り替えるか、PRF対応の認証器を使用してください。次回パスキーを選ぶ場合は同じ認証情報で再試行します。');
             }
-            let prfOutput;
-            try {
-                prfOutput = await getPasskeyPRF(pendingPasskey.credentialId, pendingPasskey.prfSalt);
-            } catch (error) {
-                throw new Error('パスキーは登録済みですが、PRF認証が完了しませんでした。次回の暗号化では同じパスキーを使って再試行します。 ' + error.message);
+            let prfOutput = createExt.prf.results && createExt.prf.results.first
+                ? new Uint8Array(createExt.prf.results.first) : null;
+            if (!prfOutput) {
+                try {
+                    prfOutput = await getPasskeyPRF(pendingPasskey.credentialId, pendingPasskey.prfSalt);
+                } catch (error) {
+                    throw new Error('パスキーは登録されましたが、PRF認証を完了できませんでした。パスワード方式を利用できます。 ' + error.message);
+                }
             }
-            return { credentialId: pendingPasskey.credentialId, prfOutput };
+            return { credentialId: pendingPasskey.credentialId, prfSalt: pendingPasskey.prfSalt, prfOutput };
         }
         async function getOrCreatePasskeyAndGetPRF() {
             if (pendingPasskey) {
@@ -865,6 +850,17 @@
                 icon.setAttribute('data-lucide', 'eye');
             }
             lucide.createIcons();
+        }
+
+        function handleEncryptPasswordInput() {
+            const value = document.getElementById('encryptPassword').value;
+            // Typing a password implicitly selects password authentication; no
+            // separate "return to password" control is needed.
+            if (value.length > 0 && encryptAuthMode === 'passkey') {
+                encryptAuthMode = 'password';
+                document.getElementById('encryptPasskeyStatus').classList.add('hidden');
+            }
+            updatePasswordStrength();
         }
 
         function updatePasswordStrength() {
@@ -1214,19 +1210,23 @@
 
         async function processEncryption() {
             const password = document.getElementById('encryptPassword').value;
-            if ((encryptAuthMode === 'password' && !password) || selectedFilesEncrypt.length === 0) {
+            const requestedAuthMode = encryptAuthMode;
+            if ((requestedAuthMode === 'password' && !password) || selectedFilesEncrypt.length === 0) {
                 showToast("ファイルと認証方式を設定してください。", "key");
                 return;
             }
 
+            // Invoke WebAuthn immediately from the button's user gesture.
+            const passkeySetupPromise = requestedAuthMode === 'passkey'
+                ? getOrCreatePasskeyAndGetPRF() : null;
             showProgressModal("暗号化を開始します", "鍵導出 & ML-KEM-768 カプセル化処理中...", 10);
             try {
                 await sleep(50);
                 const salt = crypto.getRandomValues(new Uint8Array(16));
                 let rootKey, passkeyHeader = null;
-                if (encryptAuthMode === 'passkey') {
+                if (requestedAuthMode === 'passkey') {
                     updateProgress("パスキー認証（WebAuthn PRF）を待機中...", 20);
-                    const passkey = await getOrCreatePasskeyAndGetPRF();
+                    const passkey = await passkeySetupPromise;
                     rootKey = await derivePasskeyRoot(passkey.prfOutput, salt);
                     passkeyHeader = { credentialId: passkey.credentialId, prfSalt: passkey.prfSalt };
                 } else {
@@ -1284,11 +1284,12 @@
             } catch (err) {
                 console.error('Encryption Error:', err);
                 hideProgressModal();
-                if (err && err.name === 'NotAllowedError') {
-                    showToast('パスキー操作がキャンセルされました。パスワードを入力すれば通常どおり暗号化できます。', 'key-round');
-                } else {
-                    showToast('暗号化失敗: ' + (err.message || '不明なエラー'), 'shield-alert');
+                if (requestedAuthMode === 'passkey') {
+                    encryptAuthMode = 'password';
+                    document.getElementById('encryptPasskeyStatus').classList.add('hidden');
+                    updatePasswordStrength();
                 }
+                showToast('暗号化失敗: ' + (err.message || '不明なエラー'), 'shield-alert');
             }
         }
 
@@ -1299,6 +1300,13 @@
             if (!file) return;
 
             loadedEncryptedFile = file;
+            loadedEncryptedInfoPromise = (async () => {
+                if (await isPQENC4Blob(file)) {
+                    return { format: 'pqenc4', header: await readPQENC4Header(file) };
+                }
+                const bytes = new Uint8Array(await file.arrayBuffer());
+                return { format: 'legacy', container: parseBinaryContainer(bytes) };
+            })();
             document.getElementById('decryptControlsBox').classList.remove('hidden');
             document.getElementById('decryptLoadedFileName').classList.remove('hidden');
             document.getElementById('decryptFileNameText').textContent = file.name;
@@ -1357,38 +1365,53 @@
 
         async function processDecryptionWithPasskey() {
             if (!loadedEncryptedFile) { showToast('暗号化ファイルを選択してください。', 'key'); return; }
-            showProgressModal('パスキー復号を開始します', '暗号化コンテナを検証中...', 10);
             try {
-                if (await isPQENC4Blob(loadedEncryptedFile)) {
-                    updateProgress('パスキー認証と鍵復元中...', 25);
-                    const recovered = await derivePQENC4MasterKey(loadedEncryptedFile, 'passkey', '');
-                    updateProgress('チャンクを認証・復号中...', 40);
-                    decryptedFiles = await decryptPQENC4Blob(loadedEncryptedFile, recovered.header, recovered.masterKey);
-                    hideProgressModal(); renderDecryptGallery();
-                    showToast(`${decryptedFiles.length} 個のファイルをパスキーでストリーミング復号しました。`, 'unlock');
-                    return;
+                const info = await loadedEncryptedInfoPromise;
+                if (info.format === 'pqenc4') {
+                    // Start the authenticator prompt before showing UI or doing crypto work.
+                    const prfPromise = getPasskeyPRF(info.header.credentialId, info.header.prfSalt);
+                    showProgressModal('パスキー復号を開始します', 'パスキー認証と鍵復元中...', 25);
+                    const prfOutput = await prfPromise;
+                    const rootKey = await derivePasskeyRoot(prfOutput, info.header.salt);
+                    const wrappingKey = await crypto.subtle.importKey('raw', rootKey, 'AES-GCM', false, ['decrypt']);
+                    let secretKey;
+                    try {
+                        secretKey = new Uint8Array(await crypto.subtle.decrypt(
+                            { name: 'AES-GCM', iv: info.header.skIv }, wrappingKey, info.header.encSk
+                        ));
+                    } catch (_) { throw new Error('パスキーが一致しないか、鍵データが破損しています。'); }
+                    if (secretKey.length !== 2400) throw new Error('ML-KEM-768秘密鍵の長さが不正です。');
+                    updateProgress('ML-KEM-768 共有鍵の計算中...', 55);
+                    const sharedSecret = await ML_KEM_768.decap(info.header.pqcCiphertext, secretKey);
+                    const material = new Uint8Array(64);
+                    material.set(rootKey, 0); material.set(sharedSecret, 32);
+                    const hash = await crypto.subtle.digest('SHA-256', material);
+                    const masterKey = await crypto.subtle.importKey('raw', hash, 'AES-GCM', false, ['decrypt']);
+                    updateProgress('チャンクを認証・復号中...', 70);
+                    decryptedFiles = await decryptPQENC4Blob(loadedEncryptedFile, info.header, masterKey);
+                } else {
+                    const container = info.container;
+                    if (container.authMode !== 'passkey') throw new Error('このファイルはパスキー方式ではありません。通常の復号ボタンを使用してください。');
+                    const prfPromise = getPasskeyPRF(container.credentialId, container.prfSalt);
+                    showProgressModal('パスキー復号を開始します', 'パスキー認証（WebAuthn PRF）を待機中...', 35);
+                    const prfOutput = await prfPromise;
+                    const rootKey = await derivePasskeyRoot(prfOutput, container.salt);
+                    const aesKey = await crypto.subtle.importKey('raw', rootKey, 'AES-GCM', false, ['decrypt']);
+                    let recoveredSecretKey;
+                    try { recoveredSecretKey = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: container.skIv }, aesKey, container.encSk)); }
+                    catch (_) { throw new Error('パスキーが一致しないか、暗号化データが破損しています。'); }
+                    updateProgress('ML-KEM-768 共有鍵の計算中...', 60);
+                    const pqcSharedSecret = container.cryptoVersion < 3
+                        ? await ML_KEM_768.legacyDecap(container.pqcCiphertext, recoveredSecretKey)
+                        : await ML_KEM_768.decap(container.pqcCiphertext, recoveredSecretKey);
+                    const material = new Uint8Array(64); material.set(rootKey, 0); material.set(pqcSharedSecret, 32);
+                    const hash = await crypto.subtle.digest('SHA-256', material);
+                    const masterKey = await crypto.subtle.importKey('raw', hash, 'AES-GCM', false, ['decrypt']);
+                    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: container.payloadIv }, masterKey, container.encryptedPayload);
+                    decryptedFiles = parseAndValidatePayload(new Uint8Array(plain));
                 }
-                const bytes = new Uint8Array(await loadedEncryptedFile.arrayBuffer());
-                const container = parseBinaryContainer(bytes);
-                if (container.authMode !== 'passkey') throw new Error('このファイルはパスキー方式ではありません。通常の復号ボタンを使用してください。');
-                updateProgress('パスキー認証（WebAuthn PRF）を待機中...', 35);
-                const prfOutput = await getPasskeyPRF(container.credentialId, container.prfSalt);
-                const rootKey = await derivePasskeyRoot(prfOutput, container.salt);
-                const aesKey = await crypto.subtle.importKey('raw', rootKey, 'AES-GCM', false, ['decrypt']);
-                let recoveredSecretKey;
-                try { recoveredSecretKey = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: container.skIv }, aesKey, container.encSk)); }
-                catch (_) { throw new Error('パスキーが一致しないか、暗号化データが破損しています。'); }
-                updateProgress('ML-KEM-768 共有鍵の計算中...', 60);
-                const pqcSharedSecret = container.cryptoVersion < 3
-                    ? await ML_KEM_768.legacyDecap(container.pqcCiphertext, recoveredSecretKey)
-                    : await ML_KEM_768.decap(container.pqcCiphertext, recoveredSecretKey);
-                const material = new Uint8Array(64); material.set(rootKey, 0); material.set(pqcSharedSecret, 32);
-                const hash = await crypto.subtle.digest('SHA-256', material);
-                const masterKey = await crypto.subtle.importKey('raw', hash, 'AES-GCM', false, ['decrypt']);
-                const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: container.payloadIv }, masterKey, container.encryptedPayload);
-                decryptedFiles = parseAndValidatePayload(new Uint8Array(plain));
                 hideProgressModal(); renderDecryptGallery();
-                showToast(`${decryptedFiles.length} 個のファイルをパスキーで復号しました！`, 'unlock');
+                showToast(`${decryptedFiles.length} 個のファイルをパスキーで復号しました。`, 'unlock');
             } catch (err) {
                 console.error('Passkey decryption error:', err); hideProgressModal();
                 showToast(err.message || 'パスキー復号に失敗しました。', 'shield-alert');
