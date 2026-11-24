@@ -159,7 +159,7 @@
                         
                         <div class="relative mt-2 max-w-xl">
                             <input type="password" id="encryptPassword" 
-                                   oninput="updatePasswordStrength()"
+                                   oninput="handleEncryptPasswordInput()"
                                    placeholder="安全なパスワードを入力..." 
                                    class="w-full bg-slate-950 border border-slate-800 focus:border-cyber-400 focus:ring-1 focus:ring-cyber-400 rounded-xl px-4 py-3 text-sm text-slate-100 font-mono tracking-wider pr-24 outline-none transition-all">
                             <button type="button" onclick="togglePasswordVisibility('encryptPassword', 'passVisibilityIcon')" 
@@ -170,15 +170,10 @@
                     </div>
 
                     <div class="flex items-center space-x-3">
-                        <button type="button" onclick="setEncryptAuthMode('passkey')"
+                        <button type="button" id="passkeyModeButton" onclick="toggleEncryptAuthMode()"
                                 class="px-4 py-3 bg-quantum-900/40 hover:bg-quantum-900/60 border border-quantum-500/40 rounded-xl text-xs font-semibold text-quantum-300 flex items-center space-x-2 transition">
                             <i data-lucide="fingerprint" class="w-4 h-4"></i>
                             <span>パスキーを使用</span>
-                        </button>
-                        <button type="button" id="cancelPasskeyModeButton" onclick="setEncryptAuthMode('password')"
-                                class="hidden px-4 py-3 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-xs font-semibold text-slate-200 items-center space-x-2 transition">
-                            <i data-lucide="key-round" class="w-4 h-4"></i>
-                            <span>パスワードに戻す</span>
                         </button>
                     </div>
 
@@ -707,36 +702,49 @@
         }
 
         // Passkey mode uses WebAuthn PRF to derive a local encryption key.
-        function setEncryptAuthMode(mode) {
+        // The password field always remains available. The same button toggles modes.
+        function setEncryptAuthMode(mode, notify = true) {
             encryptAuthMode = mode;
             const input = document.getElementById('encryptPassword');
             const status = document.getElementById('encryptPasskeyStatus');
-            const cancelButton = document.getElementById('cancelPasskeyModeButton');
+            const modeButton = document.getElementById('passkeyModeButton');
+
+            input.disabled = false;
+            input.placeholder = '安全なパスワードを入力...';
+
             if (mode === 'passkey') {
-                input.disabled = true;
-                input.placeholder = 'パスキー方式では使用しません';
                 status.classList.remove('hidden');
-                document.getElementById('strengthContainer').classList.add('hidden');
-                cancelButton.classList.remove('hidden');
-                cancelButton.classList.add('flex');
-                showToast('パスキー方式を選択しました。登録前ならパスワード方式に戻せます。', 'fingerprint');
+                modeButton.classList.add('bg-quantum-500/20', 'border-quantum-400/70');
+                modeButton.querySelector('span').textContent = 'パスキー選択中（解除）';
+                if (notify) showToast('パスキー方式を選択しました。もう一度ボタンを押すか、パスワードを入力するとパスワード方式に戻ります。', 'fingerprint');
             } else {
-                input.disabled = false;
-                input.placeholder = '安全なパスワードを入力...';
                 status.classList.add('hidden');
-                cancelButton.classList.add('hidden');
-                cancelButton.classList.remove('flex');
-                updatePasswordStrength();
-                showToast('パスワード方式に戻しました。', 'key-round');
+                modeButton.classList.remove('bg-quantum-500/20', 'border-quantum-400/70');
+                modeButton.querySelector('span').textContent = 'パスキーを使用';
+                if (notify) showToast('パスワード方式を選択しました。', 'key-round');
             }
+            updatePasswordStrength();
             checkReadyToEncrypt();
+        }
+
+        function toggleEncryptAuthMode() {
+            setEncryptAuthMode(encryptAuthMode === 'passkey' ? 'password' : 'passkey');
+        }
+
+        function handleEncryptPasswordInput() {
+            // Typing a password is an explicit choice to use password authentication.
+            if (encryptAuthMode === 'passkey' && document.getElementById('encryptPassword').value.length > 0) {
+                setEncryptAuthMode('password', false);
+            } else {
+                updatePasswordStrength();
+            }
         }
 
         function bufferToBase64Url(buffer) {
             const bytes = new Uint8Array(buffer);
             let binary = '';
             bytes.forEach(b => binary += String.fromCharCode(b));
-            return btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '');
+            return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
         }
         function base64UrlToBytes(value) {
             const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((value.length + 3) % 4);
@@ -759,7 +767,7 @@
                     authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
                     timeout: 120000,
                     attestation: 'none',
-                    extensions: { prf: {} }
+                    extensions: { prf: { eval: { first: prfSalt } } }
                 }
             });
             if (!credential) throw new Error('パスキーの作成がキャンセルされました。登録は完了していません。');
@@ -1276,7 +1284,11 @@
             } catch (err) {
                 console.error('Encryption Error:', err);
                 hideProgressModal();
-                showToast('暗号化失敗: ' + (err.message || '不明なエラー'), 'shield-alert');
+                if (err && err.name === 'NotAllowedError') {
+                    showToast('パスキー操作がキャンセルされました。パスワードを入力すれば通常どおり暗号化できます。', 'key-round');
+                } else {
+                    showToast('暗号化失敗: ' + (err.message || '不明なエラー'), 'shield-alert');
+                }
             }
         }
 
